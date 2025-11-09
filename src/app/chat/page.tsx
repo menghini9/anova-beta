@@ -1,7 +1,7 @@
-// ⬇️ BLOCCO 13.0 — ANOVA β Chat + Workspace v2.0 (definitiva)
+// ⬇️ BLOCCO 14.0 — ANOVA β Chat v3.7 (Completa + Firestore Totale Reale + Rinomina + Ricerca + Archivio + Cestino)
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   collection,
   addDoc,
@@ -13,7 +13,6 @@ import {
   setDoc,
   updateDoc,
   limit,
-  where,
 } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 
@@ -27,27 +26,78 @@ interface Message {
 
 interface SessionMeta {
   id: string;
-  title?: string;
+  title?: string | null;
   createdAt?: any;
   updatedAt?: any;
-  lastMessage?: string;
+  lastMessage?: string | null;
   deleted?: boolean;
 }
 
-type BlockType = "note" | "code";
+// ⬇️ BLOCCO 14.1 — Pannello Costi Totali (persistente)
+function CostPanel({
+  totalReads,
+  totalWrites,
+  onReset,
+}: {
+  totalReads: number;
+  totalWrites: number;
+  onReset: () => void;
+}) {
+  const PRICE_READS_PER_100K = 0.06;
+  const PRICE_WRITES_PER_100K = 0.18;
 
-interface WorkspaceBlock {
-  id?: string;
-  type: BlockType;
-  title: string;
-  content: string;
-  order?: number;
-  createdAt?: any;
-  updatedAt?: any;
+  const costReads = (totalReads / 100_000) * PRICE_READS_PER_100K;
+  const costWrites = (totalWrites / 100_000) * PRICE_WRITES_PER_100K;
+  const costTotal = costReads + costWrites;
+
+  return (
+    <div className="fixed bottom-4 right-4 z-40">
+      <details className="bg-neutral-900/95 backdrop-blur border border-neutral-800 rounded-xl p-3 text-sm text-neutral-200 w-[320px]">
+        <summary className="cursor-pointer select-none">
+          💸 Costi Firestore (totali)
+        </summary>
+        <div className="mt-2 space-y-2">
+          <div className="text-xs text-neutral-400">
+            Stima cumulativa locale — valori persistenti in memoria.
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <div className="bg-neutral-950 border border-neutral-800 rounded-lg p-2">
+              <div className="text-[11px] text-neutral-500">Tot. letture</div>
+              <div className="text-base">{totalReads.toLocaleString()}</div>
+            </div>
+            <div className="bg-neutral-950 border border-neutral-800 rounded-lg p-2">
+              <div className="text-[11px] text-neutral-500">Tot. scritture</div>
+              <div className="text-base">{totalWrites.toLocaleString()}</div>
+            </div>
+          </div>
+          <div className="bg-neutral-950 border border-neutral-800 rounded-lg p-2">
+            <div className="text-[11px] text-neutral-500">Costo stimato</div>
+            <div className="text-base font-medium text-green-400">
+              {costTotal.toLocaleString(undefined, {
+                style: "currency",
+                currency: "USD",
+                minimumFractionDigits: 4,
+              })}
+            </div>
+            <div className="text-[11px] text-neutral-500">
+              (Letture: {costReads.toFixed(4)} • Scritture: {costWrites.toFixed(4)})
+            </div>
+          </div>
+          <button
+            onClick={onReset}
+            className="mt-3 text-xs text-red-400 hover:text-red-300"
+          >
+            🔄 Azzera contatore locale
+          </button>
+        </div>
+      </details>
+    </div>
+  );
 }
 
+// ⬇️ BLOCCO 14.2 — Pagina Chat Principale
 export default function ChatPage() {
-  // ⬇️ BLOCCO 13.1 — Stati principali
+  // Stati principali
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [toastMessage, setToastMessage] = useState<string | null>(null);
@@ -58,22 +108,52 @@ export default function ChatPage() {
 
   const [showArchive, setShowArchive] = useState(false);
   const [showTrash, setShowTrash] = useState(false);
-  const [showWorkspace, setShowWorkspace] = useState(true);
 
   const [sessions, setSessions] = useState<SessionMeta[]>([]);
   const [trashSessions, setTrashSessions] = useState<SessionMeta[]>([]);
 
-  const [blocks, setBlocks] = useState<WorkspaceBlock[]>([]);
-  const savingRef = useRef<NodeJS.Timeout | null>(null);
-  // ⬆️ FINE BLOCCO 13.1
+  const [inlineEditId, setInlineEditId] = useState<string | null>(null);
+  const [inlineEditValue, setInlineEditValue] = useState<string>("");
 
-  // ⬇️ BLOCCO 13.2 — Bootstrap sessione (crea se manca + doc meta)
+  const [searchArchive, setSearchArchive] = useState("");
+  const [searchTrash, setSearchTrash] = useState("");
+
+  // 🔹 Contatori cumulativi Firestore
+  const [totalReads, setTotalReads] = useState<number>(() => {
+    const saved = localStorage.getItem("anovaTotalReads");
+    return saved ? parseInt(saved, 10) : 0;
+  });
+  const [totalWrites, setTotalWrites] = useState<number>(() => {
+    const saved = localStorage.getItem("anovaTotalWrites");
+    return saved ? parseInt(saved, 10) : 0;
+  });
+
+  // Persistenza automatica
+  useEffect(() => {
+    localStorage.setItem("anovaTotalReads", totalReads.toString());
+  }, [totalReads]);
+  useEffect(() => {
+    localStorage.setItem("anovaTotalWrites", totalWrites.toString());
+  }, [totalWrites]);
+
+  // Reset manuale
+  const resetCounters = () => {
+    localStorage.removeItem("anovaTotalReads");
+    localStorage.removeItem("anovaTotalWrites");
+    setTotalReads(0);
+    setTotalWrites(0);
+  };
+
+  // Funzioni rapide
+  const incRead = (n = 1) => setTotalReads((v) => v + n);
+  const incWrite = (n = 1) => setTotalWrites((v) => v + n);
+
+  // ⬇️ BLOCCO 14.3 — Bootstrap sessione
   useEffect(() => {
     let sid = localStorage.getItem("anovaSessionId");
     if (!sid) {
       sid = Date.now().toString();
       localStorage.setItem("anovaSessionId", sid);
-      console.log("🆕 Sessione creata:", sid);
     }
     setSessionId(sid);
 
@@ -87,109 +167,67 @@ export default function ChatPage() {
         deleted: false,
       },
       { merge: true }
-    );
+    ).then(() => incWrite());
   }, []);
-  // ⬆️ FINE BLOCCO 13.2
 
-  // ⬇️ BLOCCO 13.3 — Listener meta sessione (titolo)
+  // ⬇️ BLOCCO 14.4 — Listener titolo sessione attiva
   useEffect(() => {
     if (!sessionId) return;
     const sessRef = doc(db, "sessions", sessionId);
     const unsub = onSnapshot(sessRef, (snap) => {
       const data = snap.data() as SessionMeta | undefined;
-      setSessionTitle(data?.title || "");
+      setSessionTitle((data?.title || "") as string);
+      incRead();
     });
     return () => unsub();
   }, [sessionId]);
-  // ⬆️ FINE BLOCCO 13.3
 
-  // ⬇️ BLOCCO 13.4 — Listener messaggi (sessione attiva)
+  // ⬇️ BLOCCO 14.5 — Listener messaggi (ultimi 50)
   useEffect(() => {
     if (!sessionId) return;
     const messagesRef = collection(db, "sessions", sessionId, "messages");
-    const qy = query(messagesRef, orderBy("createdAt", "asc"));
-
+    const qy = query(messagesRef, orderBy("createdAt", "desc"), limit(50));
     const unsub = onSnapshot(qy, (snap) => {
-      const m: Message[] = snap.docs.map((d) => {
-        const data = d.data() as Omit<Message, "id">;
-        return { id: d.id, ...data };
-      });
-      setMessages(m);
+      const m: Message[] = snap.docs.map((d) => ({
+        id: d.id,
+        ...(d.data() as Message),
+      }));
+      setMessages(m.reverse());
+      incRead(m.length);
     });
     return () => unsub();
   }, [sessionId]);
-  // ⬆️ FINE BLOCCO 13.4
 
-  // ⬇️ BLOCCO 13.5 — Listener Workspace blocks (sessione attiva)
+  // ⬇️ BLOCCO 14.6 — Listener Archivio + Cestino
   useEffect(() => {
-    if (!sessionId) return;
-    const blocksRef = collection(db, "sessions", sessionId, "workspaceBlocks");
-    const qy = query(blocksRef, orderBy("createdAt", "asc"));
-    const unsub = onSnapshot(qy, (snap) => {
-      const b: WorkspaceBlock[] = snap.docs.map((d) => {
-        const data = d.data() as Omit<WorkspaceBlock, "id">;
-        return { id: d.id, ...data };
-      });
-      setBlocks(b);
+    const sessionsRef = collection(db, "sessions");
+    const qAll = query(sessionsRef, orderBy("updatedAt", "desc"), limit(100));
+    const unsub = onSnapshot(qAll, (snap) => {
+      const all: SessionMeta[] = snap.docs.map((d) => ({
+        id: d.id,
+        ...(d.data() as Omit<SessionMeta, "id">),
+      }));
+      setSessions(all.filter((s) => !s.deleted));
+      setTrashSessions(all.filter((s) => s.deleted));
+      incRead(all.length);
     });
     return () => unsub();
-  }, [sessionId]);
-  // ⬆️ FINE BLOCCO 13.5
-
-  // ⬇️ BLOCCO 13.6 — Listener Archivio/Cestino
-  useEffect(() => {
-    const qArchive = query(
-      collection(db, "sessions"),
-      where("deleted", "==", false),
-      orderBy("updatedAt", "desc"),
-      limit(50)
-    );
-    const unsubA = onSnapshot(qArchive, (snap) => {
-      const list: SessionMeta[] = snap.docs.map((d) => ({
-        id: d.id,
-        ...(d.data() as Omit<SessionMeta, "id">),
-      }));
-      setSessions(list);
-    });
-
-    const qTrash = query(
-      collection(db, "sessions"),
-      where("deleted", "==", true),
-      orderBy("updatedAt", "desc"),
-      limit(50)
-    );
-    const unsubT = onSnapshot(qTrash, (snap) => {
-      const list: SessionMeta[] = snap.docs.map((d) => ({
-        id: d.id,
-        ...(d.data() as Omit<SessionMeta, "id">),
-      }));
-      setTrashSessions(list);
-    });
-
-    return () => {
-      unsubA();
-      unsubT();
-    };
   }, []);
-  // ⬆️ FINE BLOCCO 13.6
 
-  // ⬇️ BLOCCO 13.7 — Nuova sessione + benvenuto
+  // ⬇️ BLOCCO 14.7 — Nuova sessione
   const handleNewSession = async () => {
     const newId = Date.now().toString();
     localStorage.setItem("anovaSessionId", newId);
     setSessionId(newId);
 
     const sessRef = doc(db, "sessions", newId);
-    await setDoc(
-      sessRef,
-      {
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-        lastMessage: "Sessione avviata. Pronta per lavorare insieme.",
-        deleted: false,
-      },
-      { merge: true }
-    );
+    await setDoc(sessRef, {
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+      lastMessage: "Sessione avviata. Pronta per lavorare insieme.",
+      deleted: false,
+    });
+    incWrite(2);
 
     const messagesRef = collection(db, "sessions", newId, "messages");
     await addDoc(messagesRef, {
@@ -197,45 +235,55 @@ export default function ChatPage() {
       text: "Sessione avviata. Pronta per lavorare insieme.",
       createdAt: serverTimestamp(),
     });
+    incWrite();
 
     setMessages([]);
-    setBlocks([]);
     setSessionTitle("");
     setToastMessage("✅ Nuova sessione avviata");
-    setTimeout(() => setToastMessage(null), 2000);
+    setTimeout(() => setToastMessage(null), 1800);
   };
-  // ⬆️ FINE BLOCCO 13.7
 
-  // ⬇️ BLOCCO 13.8 — Rinomina sessione (inline)
-  const commitTitle = async () => {
+  // ⬇️ BLOCCO 14.8 — Rinomina (header + inline)
+  const commitActiveTitle = async () => {
     if (!sessionId) return;
+    const clean = sessionTitle?.trim();
     await updateDoc(doc(db, "sessions", sessionId), {
-      title: sessionTitle || null,
+      title: clean ? clean : null,
       updatedAt: serverTimestamp(),
     });
+    incWrite();
     setEditingTitle(false);
     setToastMessage("✏️ Titolo aggiornato");
     setTimeout(() => setToastMessage(null), 1200);
   };
-  // ⬆️ FINE BLOCCO 13.8
 
-  // ⬇️ BLOCCO 13.9 — Apertura / cestino / restore
-  const handleOpenSession = (id: string) => {
-    localStorage.setItem("anovaSessionId", id);
-    setSessionId(id);
-    setShowArchive(false);
-    setShowTrash(false);
-    setToastMessage("📂 Sessione caricata");
-    setTimeout(() => setToastMessage(null), 1200);
+  const startInlineRename = (id: string, currentTitle?: string | null) => {
+    setInlineEditId(id);
+    setInlineEditValue((currentTitle || "").trim() || `#${id.slice(-6)}`);
   };
 
+  const commitInlineRename = async (id: string) => {
+    const value = inlineEditValue.trim();
+    await updateDoc(doc(db, "sessions", id), {
+      title: value || null,
+      updatedAt: serverTimestamp(),
+    });
+    incWrite();
+    setInlineEditId(null);
+    setInlineEditValue("");
+    setToastMessage("✏️ Titolo aggiornato");
+    setTimeout(() => setToastMessage(null), 1000);
+  };
+
+  // ⬇️ BLOCCO 14.9 — Cestina / Ripristina
   const handleDeleteSession = async (id: string) => {
     await updateDoc(doc(db, "sessions", id), {
       deleted: true,
       updatedAt: serverTimestamp(),
     });
-    setToastMessage("🗑️ Sessione spostata nel cestino");
-    setTimeout(() => setToastMessage(null), 1500);
+    incWrite();
+    setToastMessage("🗑️ Spostata nel cestino");
+    setTimeout(() => setToastMessage(null), 1200);
   };
 
   const handleRestoreSession = async (id: string) => {
@@ -243,49 +291,21 @@ export default function ChatPage() {
       deleted: false,
       updatedAt: serverTimestamp(),
     });
+    incWrite();
     setToastMessage("♻️ Sessione ripristinata");
-    setTimeout(() => setToastMessage(null), 1500);
-  };
-  // ⬆️ FINE BLOCCO 13.9
-
-  // ⬇️ BLOCCO 13.10 — Risposte AI simulate + auto-block Workspace
-  const looksLikeCode = (txt: string) => {
-    if (txt.includes("```")) return true;
-    const heuristics = ["import ", "export ", ";", "{", "}", "<div", "function ", "=>"];
-    return heuristics.some((h) => txt.includes(h));
+    setTimeout(() => setToastMessage(null), 1200);
   };
 
+  // ⬇️ BLOCCO 14.10 — Simulazione AI locale
   const generateLocalResponse = (prompt: string) => {
     const lower = prompt.toLowerCase();
-    if (lower.includes("ciao"))
-      return "```ts\n// ⬇️ BLOCCO 1 — Esempio codice\nconsole.log('Ciao Luca, Anova β è pronta.');\n// ⬆️ FINE BLOCCO 1\n```";
-    if (lower.includes("test") || lower.includes("prova"))
-      return "Test eseguito correttamente. Sistema stabile.";
-    if (lower.includes("chi sei"))
-      return "Sono Anova β — un ponte tra te e le intelligenze artificiali.";
-    if (lower.includes("tempo") || lower.includes("oggi"))
-      return "Oggi è una buona giornata per creare.";
-    return "Ricevuto. Elaboro internamente il contesto e preparo una risposta.";
+    if (lower.includes("ciao")) return "Ciao Luca. Sono pronta per lavorare insieme in Anova β.";
+    if (lower.includes("test") || lower.includes("prova")) return "Test completato con successo. Sistema stabile.";
+    if (lower.includes("chi sei")) return "Sono Anova β — il tuo ambiente operativo cognitivo.";
+    return "Ricevuto. Elaboro il contesto e preparo una risposta.";
   };
 
-  const maybeCreateWorkspaceBlock = async (text: string) => {
-    if (!sessionId) return;
-    const code = looksLikeCode(text);
-    if (!code) return;
-    const blocksRef = collection(db, "sessions", sessionId, "workspaceBlocks");
-    await addDoc(blocksRef, {
-      type: "code",
-      title: "Blocco generato dalla chat",
-      content: text.replace(/^```[a-zA-Z]*\n?/, "").replace(/```$/, ""),
-      createdAt: serverTimestamp(),
-      updatedAt: serverTimestamp(),
-    });
-    setToastMessage("🧩 Blocco Workspace creato");
-    setTimeout(() => setToastMessage(null), 1500);
-  };
-  // ⬆️ FINE BLOCCO 13.10
-
-  // ⬇️ BLOCCO 13.11 — Invio messaggi (aggiorna meta + auto-block)
+  // ⬇️ BLOCCO 14.11 — Invio messaggi (+ meta update)
   const handleSend = async (e: React.FormEvent) => {
     e.preventDefault();
     const trimmed = input.trim();
@@ -297,98 +317,58 @@ export default function ChatPage() {
       text: trimmed,
       createdAt: serverTimestamp(),
     });
+    incWrite(2);
+
     await updateDoc(doc(db, "sessions", sessionId), {
       updatedAt: serverTimestamp(),
       lastMessage: trimmed,
     });
+    incWrite();
 
     setInput("");
-    await new Promise((r) => setTimeout(r, 500));
-    const aiResponse = generateLocalResponse(trimmed);
+    await new Promise((r) => setTimeout(r, 450));
 
+    const aiResponse = generateLocalResponse(trimmed);
     await addDoc(messagesRef, {
       sender: "anova",
       text: aiResponse,
       createdAt: serverTimestamp(),
     });
+    incWrite(2);
+
     await updateDoc(doc(db, "sessions", sessionId), {
       updatedAt: serverTimestamp(),
       lastMessage: aiResponse,
     });
-
-    // ➕ crea blocco Workspace se la risposta “sembra codice”
-    await maybeCreateWorkspaceBlock(aiResponse);
+    incWrite();
   };
-  // ⬆️ FINE BLOCCO 13.11
 
-  // ⬇️ BLOCCO 13.12 — Workspace: azioni blocchi
-  const addBlock = async (type: BlockType) => {
-    if (!sessionId) return;
-    const blocksRef = collection(db, "sessions", sessionId, "workspaceBlocks");
-    const title =
-      type === "code" ? "Nuovo blocco codice" : "Nuova nota";
-    const template =
-      type === "code"
-        ? "// ⬇️ BLOCCO X — Titolo\n\n// codice qui\n\n// ⬆️ FINE BLOCCO X"
-        : "Titolo nota\n\nTesto della nota...";
-    await addDoc(blocksRef, {
-      type,
-      title,
-      content: template,
-      createdAt: serverTimestamp(),
-      updatedAt: serverTimestamp(),
+  // ⬇️ BLOCCO 14.12 — Filtri ricerca archivio/cestino
+  const filteredArchive = useMemo(() => {
+    const t = searchArchive.toLowerCase().trim();
+    if (!t) return sessions;
+    return sessions.filter((s) => {
+      const title = (s.title || "").toLowerCase();
+      const id = s.id.toLowerCase();
+      const last = (s.lastMessage || "").toLowerCase();
+      return title.includes(t) || id.includes(t) || last.includes(t);
     });
-  };
+  }, [sessions, searchArchive]);
 
-  const updateBlock = async (b: WorkspaceBlock) => {
-    if (!sessionId || !b.id) return;
-    // debounce soft: micro-ritardo per batch
-    if (savingRef.current) clearTimeout(savingRef.current);
-    savingRef.current = setTimeout(async () => {
-      await updateDoc(
-        doc(db, "sessions", sessionId, "workspaceBlocks", b.id!),
-        {
-          title: b.title,
-          content: b.content,
-          updatedAt: serverTimestamp(),
-        }
-      );
-    }, 250);
-  };
+  const filteredTrash = useMemo(() => {
+    const t = searchTrash.toLowerCase().trim();
+    if (!t) return trashSessions;
+    return trashSessions.filter((s) => {
+      const title = (s.title || "").toLowerCase();
+      const id = s.id.toLowerCase();
+      const last = (s.lastMessage || "").toLowerCase();
+      return title.includes(t) || id.includes(t) || last.includes(t);
+    });
+  }, [trashSessions, searchTrash]);
 
-  const copyToClipboard = async (txt: string) => {
-    try {
-      await navigator.clipboard.writeText(txt);
-      setToastMessage("📋 Copiato negli appunti");
-      setTimeout(() => setToastMessage(null), 1200);
-    } catch {
-      console.error("Clipboard non disponibile");
-    }
-  };
-
-  const applyBlock = (b: WorkspaceBlock) => {
-    // Placeholder operativo: qui potresti inviare in un endpoint /api/apply
-    console.log("🔧 APPLY blocco:", b.title);
-    setToastMessage("🔧 Apply (placeholder)");
-    setTimeout(() => setToastMessage(null), 1000);
-  };
-
-  const diffBlock = (b: WorkspaceBlock) => {
-    // Placeholder Diff: integrazione futura con lib di diff
-    console.log("🔍 DIFF blocco:", b.title);
-    setToastMessage("🔍 Diff (placeholder)");
-    setTimeout(() => setToastMessage(null), 1000);
-  };
-  // ⬆️ FINE BLOCCO 13.12
-
-  // ⬇️ BLOCCO 13.13 — UI
-  const activeLabel = useMemo(
-    () => (sessionId ? (sessionTitle ? sessionTitle : `#${sessionId.slice(-6)}`) : "—"),
-    [sessionId, sessionTitle]
-  );
-
+  // ⬇️ BLOCCO 14.13 — UI Completa
   return (
-    <main className="h-screen w-screen flex bg-black text-neutral-100 relative">
+    <main className="h-screen w-screen flex bg-black text-neutral-100 relative overflow-hidden">
       {/* ARCHIVIO */}
       <aside
         className={`fixed top-0 left-0 h-full w-80 bg-neutral-950 border-r border-neutral-800 z-40 transition-transform duration-300 ${
@@ -404,28 +384,47 @@ export default function ChatPage() {
             Chiudi
           </button>
         </div>
-        <div className="p-3 overflow-y-auto h-[calc(100%-56px)] space-y-2">
-          {sessions.length === 0 ? (
-            <div className="text-neutral-600 text-sm px-2 py-4">
-              Nessuna sessione.
-            </div>
+        <div className="px-4 py-3 border-b border-neutral-800">
+          <input
+            type="text"
+            placeholder="Cerca chat…"
+            value={searchArchive}
+            onChange={(e) => setSearchArchive(e.target.value)}
+            className="w-full bg-neutral-900 border border-neutral-700 rounded-lg px-3 py-2 text-sm text-neutral-200 placeholder-neutral-500 focus:outline-none focus:border-white"
+          />
+        </div>
+        <div className="p-3 overflow-y-auto h-[calc(100%-110px)] space-y-2">
+          {filteredArchive.length === 0 ? (
+            <div className="text-neutral-600 text-sm px-2 py-4">Nessuna sessione.</div>
           ) : (
-            sessions.map((s) => (
-              <div
-                key={s.id}
-                className="border border-neutral-800 rounded-lg p-2 hover:bg-neutral-900 transition"
-              >
-                <div className="flex justify-between items-center gap-2">
+            filteredArchive.map((s) => (
+              <div key={s.id} className="border border-neutral-800 rounded-lg p-2 hover:bg-neutral-900 transition">
+                <div className="flex items-center gap-2">
+                  {inlineEditId === s.id ? (
+                    <input
+                      value={inlineEditValue}
+                      onChange={(e) => setInlineEditValue(e.target.value)}
+                      onBlur={() => commitInlineRename(s.id)}
+                      onKeyDown={(e) => e.key === "Enter" && commitInlineRename(s.id)}
+                      autoFocus
+                      className="flex-1 bg-neutral-900 border border-neutral-700 rounded px-2 py-1 text-sm"
+                    />
+                  ) : (
+                    <button onClick={() => setSessionId(s.id)} className="text-left text-sm flex-1">
+                      <div className="text-xs text-neutral-400">
+                        {s.title?.trim() ? s.title : `#${s.id.slice(-6)}`}
+                      </div>
+                      <div className="line-clamp-1 text-neutral-300">{s.lastMessage || "—"}</div>
+                    </button>
+                  )}
                   <button
-                    onClick={() => handleOpenSession(s.id)}
-                    className="text-left text-sm flex-1"
+                    onClick={() =>
+                      inlineEditId === s.id ? commitInlineRename(s.id) : startInlineRename(s.id, s.title)
+                    }
+                    className="text-neutral-400 hover:text-white text-xs px-2"
+                    title="Rinomina"
                   >
-                    <div className="text-xs text-neutral-400">
-                      {(s.title && s.title.trim()) ? s.title : `#${s.id.slice(-6)}`}
-                    </div>
-                    <div className="line-clamp-1 text-neutral-300">
-                      {s.lastMessage || "—"}
-                    </div>
+                    ✏️
                   </button>
                   <button
                     onClick={() => handleDeleteSession(s.id)}
@@ -456,28 +455,47 @@ export default function ChatPage() {
             Chiudi
           </button>
         </div>
-        <div className="p-3 overflow-y-auto h-[calc(100%-56px)] space-y-2">
-          {trashSessions.length === 0 ? (
-            <div className="text-neutral-600 text-sm px-2 py-4">
-              Nessuna sessione cestinata.
-            </div>
+        <div className="px-4 py-3 border-b border-neutral-800">
+          <input
+            type="text"
+            placeholder="Cerca…"
+            value={searchTrash}
+            onChange={(e) => setSearchTrash(e.target.value)}
+            className="w-full bg-neutral-900 border border-neutral-700 rounded-lg px-3 py-2 text-sm text-neutral-200 placeholder-neutral-500 focus:outline-none focus:border-white"
+          />
+        </div>
+        <div className="p-3 overflow-y-auto h-[calc(100%-110px)] space-y-2">
+          {filteredTrash.length === 0 ? (
+            <div className="text-neutral-600 text-sm px-2 py-4">Nessuna sessione cestinata.</div>
           ) : (
-            trashSessions.map((s) => (
-              <div
-                key={s.id}
-                className="border border-neutral-800 rounded-lg p-2 hover:bg-neutral-900 transition"
-              >
-                <div className="flex justify-between items-center gap-2">
+            filteredTrash.map((s) => (
+              <div key={s.id} className="border border-neutral-800 rounded-lg p-2 hover:bg-neutral-900 transition">
+                <div className="flex items-center gap-2">
+                  {inlineEditId === s.id ? (
+                    <input
+                      value={inlineEditValue}
+                      onChange={(e) => setInlineEditValue(e.target.value)}
+                      onBlur={() => commitInlineRename(s.id)}
+                      onKeyDown={(e) => e.key === "Enter" && commitInlineRename(s.id)}
+                      autoFocus
+                      className="flex-1 bg-neutral-900 border border-neutral-700 rounded px-2 py-1 text-sm"
+                    />
+                  ) : (
+                    <div className="flex-1">
+                      <div className="text-neutral-400 line-clamp-1">
+                        {s.title?.trim() ? s.title : `#${s.id.slice(-6)}`}
+                      </div>
+                      <div className="text-neutral-600 text-xs line-clamp-1">{s.lastMessage || "—"}</div>
+                    </div>
+                  )}
                   <button
-                    onClick={() => handleOpenSession(s.id)}
-                    className="text-left text-sm flex-1"
+                    onClick={() =>
+                      inlineEditId === s.id ? commitInlineRename(s.id) : startInlineRename(s.id, s.title)
+                    }
+                    className="text-neutral-400 hover:text-white text-xs px-2"
+                    title="Rinomina"
                   >
-                    <div className="text-xs text-neutral-500">
-                      {(s.title && s.title.trim()) ? s.title : `#${s.id.slice(-6)}`}
-                    </div>
-                    <div className="line-clamp-1 text-neutral-500">
-                      {s.lastMessage || "—"}
-                    </div>
+                    ✏️
                   </button>
                   <button
                     onClick={() => handleRestoreSession(s.id)}
@@ -498,15 +516,16 @@ export default function ChatPage() {
         {/* HEADER */}
         <header className="flex justify-between items-center px-6 py-4 border-b border-neutral-800">
           <div className="flex items-center gap-3">
-            <h2 className="text-xl font-semibold">Anova<span className="text-neutral-500"> β</span> — Chat</h2>
-            {/* Titolo/rename */}
+            <h2 className="text-xl font-semibold">
+              Anova<span className="text-neutral-500"> β</span> — Chat
+            </h2>
             <div className="flex items-center gap-2">
               {editingTitle ? (
                 <input
                   value={sessionTitle}
                   onChange={(e) => setSessionTitle(e.target.value)}
-                  onBlur={commitTitle}
-                  onKeyDown={(e) => e.key === "Enter" && commitTitle()}
+                  onBlur={commitActiveTitle}
+                  onKeyDown={(e) => e.key === "Enter" && commitActiveTitle()}
                   className="text-xs px-2 py-1 bg-neutral-900 border border-neutral-700 rounded"
                   autoFocus
                   placeholder={`#${sessionId?.slice(-6)}`}
@@ -517,12 +536,11 @@ export default function ChatPage() {
                   className="text-xs px-2 py-1 border border-neutral-800 rounded-lg text-neutral-400 hover:text-white"
                   title="Rinomina sessione"
                 >
-                  {activeLabel}
+                  {sessionTitle?.trim() ? sessionTitle : `#${sessionId?.slice(-6)}`}
                 </button>
               )}
             </div>
           </div>
-
           <div className="flex items-center gap-3">
             <button
               onClick={() => setShowArchive((v) => !v)}
@@ -535,12 +553,6 @@ export default function ChatPage() {
               className="px-3 py-1 text-sm border border-neutral-700 rounded-lg hover:bg-neutral-900 transition"
             >
               Cestino
-            </button>
-            <button
-              onClick={() => setShowWorkspace((v) => !v)}
-              className="px-3 py-1 text-sm border border-neutral-700 rounded-lg hover:bg-neutral-900 transition"
-            >
-              {showWorkspace ? "Nascondi Workspace" : "Mostra Workspace"}
             </button>
             <button
               onClick={handleNewSession}
@@ -594,109 +606,16 @@ export default function ChatPage() {
         </form>
       </div>
 
-      {/* WORKSPACE (colonna destra) */}
-      <aside
-        className={`h-full w-[36rem] max-w-[90vw] bg-neutral-950 border-l border-neutral-800 transition-transform duration-300 fixed right-0 top-0 z-30 ${
-          showWorkspace ? "translate-x-0" : "translate-x-full"
-        }`}
-      >
-        <div className="px-5 py-4 flex items-center justify-between border-b border-neutral-800">
-          <h3 className="text-base font-semibold">Workspace</h3>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => addBlock("note")}
-              className="text-sm px-3 py-1 border border-neutral-700 rounded hover:bg-neutral-900"
-            >
-              + Nota
-            </button>
-            <button
-              onClick={() => addBlock("code")}
-              className="text-sm px-3 py-1 border border-neutral-700 rounded hover:bg-neutral-900"
-            >
-              + Codice
-            </button>
-            <button
-              onClick={() => setShowWorkspace(false)}
-              className="text-sm text-neutral-400 hover:text-white"
-            >
-              Chiudi
-            </button>
-          </div>
-        </div>
-
-        <div className="p-4 overflow-y-auto h-[calc(100%-56px)] space-y-4">
-          {blocks.length === 0 ? (
-            <div className="text-neutral-600 text-sm px-2 py-4">
-              Nessun blocco ancora. Genera codice in chat o crea un blocco.
-            </div>
-          ) : (
-            blocks.map((b, idx) => (
-              <div
-                key={b.id || idx}
-                className="rounded-xl border border-neutral-800 bg-neutral-900 p-3 space-y-2"
-              >
-                <input
-                  value={b.title}
-                  onChange={(e) =>
-                    setBlocks((prev) =>
-                      prev.map((x) =>
-                        x.id === b.id ? { ...x, title: e.target.value } : x
-                      )
-                    )
-                  }
-                  onBlur={() => updateBlock({ ...b, title: (blocks.find(x => x.id === b.id)?.title || "") })}
-                  className="w-full bg-neutral-950 border border-neutral-800 rounded px-3 py-1 text-sm"
-                />
-                <textarea
-                  value={b.content}
-                  onChange={(e) =>
-                    setBlocks((prev) =>
-                      prev.map((x) =>
-                        x.id === b.id ? { ...x, content: e.target.value } : x
-                      )
-                    )
-                  }
-                  onBlur={() => updateBlock({ ...b, content: (blocks.find(x => x.id === b.id)?.content || "") })}
-                  className={`w-full min-h-[160px] bg-neutral-950 border border-neutral-800 rounded p-3 text-sm font-mono ${
-                    b.type === "code" ? "whitespace-pre" : "whitespace-pre-wrap"
-                  }`}
-                />
-                <div className="flex items-center gap-2">
-                  <button
-                    onClick={() => copyToClipboard(b.content)}
-                    className="px-3 py-1 text-sm border border-neutral-700 rounded hover:bg-neutral-800"
-                  >
-                    Copia
-                  </button>
-                  <button
-                    onClick={() => applyBlock(b)}
-                    className="px-3 py-1 text-sm border border-neutral-700 rounded hover:bg-neutral-800"
-                  >
-                    Applica
-                  </button>
-                  <button
-                    onClick={() => diffBlock(b)}
-                    className="px-3 py-1 text-sm border border-neutral-700 rounded hover:bg-neutral-800"
-                  >
-                    Confronta (Diff)
-                  </button>
-                  <span className="ml-auto text-xs text-neutral-500">
-                    {b.type === "code" ? "BLOCCO CODICE" : "NOTA"}
-                  </span>
-                </div>
-              </div>
-            ))
-          )}
-        </div>
-      </aside>
-
       {/* TOAST */}
       {toastMessage && (
         <div className="fixed bottom-6 left-1/2 transform -translate-x-1/2 bg-neutral-800 text-white px-4 py-2 rounded-lg shadow-lg text-sm animate-fade z-50">
           {toastMessage}
         </div>
       )}
+
+      {/* PANNELLO COSTI */}
+      <CostPanel totalReads={totalReads} totalWrites={totalWrites} onReset={resetCounters} />
     </main>
   );
 }
-// ⬆️ FINE BLOCCO 13.0
+// ⬆️ FINE BLOCCO 14.0 — v3.7 COMPLETO

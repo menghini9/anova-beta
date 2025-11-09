@@ -21,12 +21,15 @@ export default function HomePage() {
 
       {/* 🔹 AREA PULSANTE CENTRALE */}
       <div className="mt-10 flex gap-6">
-        <Link
-          href="/chat"
-          className="bg-white text-black px-8 py-3 rounded-lg font-medium hover:bg-neutral-200 transition"
-        >
-          Apri Chat
-        </Link>
+     <Link
+  href="/chat"
+  className="bg-white text-black hover:bg-neutral-200 active:bg-neutral-100 px-8 py-3 rounded-lg font-medium transition-colors shadow-md"
+  style={{ color: "#000" }}
+>
+  Apri Chat
+</Link>
+
+
       </div>
     </main>
   );
