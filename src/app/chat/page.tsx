@@ -1,9 +1,7 @@
+// ⬇️ BLOCCO 14.0 — ANOVA β Chat v3.7 (Completa + Firestore Totale Reale + Rinomina + Ricerca + Archivio + Cestino)
 "use client";
 
-// ⬇️ BLOCCO 14.0 — ANOVA β Chat v3.7 (Completa + Firestore Totale Reale + Rinomina + Ricerca + Archivio + Cestino)
-
-
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   collection,
   addDoc,
@@ -18,7 +16,9 @@ import {
 } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 
-// 🧩 Tipi
+/* =========================================================
+   🧩 Tipi
+   ========================================================= */
 interface Message {
   id?: string;
   sender: "user" | "anova";
@@ -35,7 +35,15 @@ interface SessionMeta {
   deleted?: boolean;
 }
 
-// ⬇️ BLOCCO 14.1 — Pannello Costi Totali (persistente)
+/* =========================================================
+   🔢 Costi (piano Blaze indicativo)
+   ========================================================= */
+const PRICE_READS_PER_100K = 0.06;
+const PRICE_WRITES_PER_100K = 0.18;
+
+/* =========================================================
+   💸 Pannello Costi (cumulativo persistente)
+   ========================================================= */
 function CostPanel({
   totalReads,
   totalWrites,
@@ -45,9 +53,6 @@ function CostPanel({
   totalWrites: number;
   onReset: () => void;
 }) {
-  const PRICE_READS_PER_100K = 0.06;
-  const PRICE_WRITES_PER_100K = 0.18;
-
   const costReads = (totalReads / 100_000) * PRICE_READS_PER_100K;
   const costWrites = (totalWrites / 100_000) * PRICE_WRITES_PER_100K;
   const costTotal = costReads + costWrites;
@@ -55,12 +60,10 @@ function CostPanel({
   return (
     <div className="fixed bottom-4 right-4 z-40">
       <details className="bg-neutral-900/95 backdrop-blur border border-neutral-800 rounded-xl p-3 text-sm text-neutral-200 w-[320px]">
-        <summary className="cursor-pointer select-none">
-          💸 Costi Firestore (totali)
-        </summary>
+        <summary className="cursor-pointer select-none">💸 Costi Firestore (totali)</summary>
         <div className="mt-2 space-y-2">
           <div className="text-xs text-neutral-400">
-            Stima cumulativa locale — valori persistenti in memoria.
+            Stima cumulativa locale (persistente). Non è il billing reale.
           </div>
           <div className="grid grid-cols-2 gap-2">
             <div className="bg-neutral-950 border border-neutral-800 rounded-lg p-2">
@@ -75,20 +78,13 @@ function CostPanel({
           <div className="bg-neutral-950 border border-neutral-800 rounded-lg p-2">
             <div className="text-[11px] text-neutral-500">Costo stimato</div>
             <div className="text-base font-medium text-green-400">
-              {costTotal.toLocaleString(undefined, {
-                style: "currency",
-                currency: "USD",
-                minimumFractionDigits: 4,
-              })}
+              {costTotal.toLocaleString(undefined, { style: "currency", currency: "USD", minimumFractionDigits: 4 })}
             </div>
             <div className="text-[11px] text-neutral-500">
               (Letture: {costReads.toFixed(4)} • Scritture: {costWrites.toFixed(4)})
             </div>
           </div>
-          <button
-            onClick={onReset}
-            className="mt-3 text-xs text-red-400 hover:text-red-300"
-          >
+          <button onClick={onReset} className="mt-3 text-xs text-red-400 hover:text-red-300">
             🔄 Azzera contatore locale
           </button>
         </div>
@@ -97,9 +93,23 @@ function CostPanel({
   );
 }
 
-// ⬇️ BLOCCO 14.2 — Pagina Chat Principale
+/* =========================================================
+   🧠 Cache Intelligente (in-memory)
+   - evita di riattaccare il listener se la stessa chat è "fresca"
+   - TTL configurabile (ms)
+   ========================================================= */
+type SessionCache = {
+  [sid: string]: { messages: Message[]; title: string; ts: number };
+};
+const CACHE_TTL_MS = 30_000; // 30s: se riapri la stessa chat entro 30s non riapre listener subito
+
+/* =========================================================
+   ⛳ Pagina Chat
+   ========================================================= */
 export default function ChatPage() {
-  // Stati principali
+  /* ---------------------------------------
+     Stati principali
+     --------------------------------------- */
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [toastMessage, setToastMessage] = useState<string | null>(null);
@@ -114,51 +124,69 @@ export default function ChatPage() {
   const [sessions, setSessions] = useState<SessionMeta[]>([]);
   const [trashSessions, setTrashSessions] = useState<SessionMeta[]>([]);
 
+  // Rinomina inline (card)
   const [inlineEditId, setInlineEditId] = useState<string | null>(null);
   const [inlineEditValue, setInlineEditValue] = useState<string>("");
 
+  // Ricerca
   const [searchArchive, setSearchArchive] = useState("");
   const [searchTrash, setSearchTrash] = useState("");
 
-  // 🔹 Contatori cumulativi Firestore
+  // Telemetria cumulativa persistente
   const [totalReads, setTotalReads] = useState<number>(() => {
+    if (typeof window === "undefined") return 0;
     const saved = localStorage.getItem("anovaTotalReads");
     return saved ? parseInt(saved, 10) : 0;
   });
   const [totalWrites, setTotalWrites] = useState<number>(() => {
+    if (typeof window === "undefined") return 0;
     const saved = localStorage.getItem("anovaTotalWrites");
     return saved ? parseInt(saved, 10) : 0;
   });
 
-  // Persistenza automatica
+  // Helpers costo
+  const incRead = (n = 1) => setTotalReads((v) => v + n);
+  const incWrite = (n = 1) => setTotalWrites((v) => v + n);
+
+  // Persistenza automatica contatori
   useEffect(() => {
-    localStorage.setItem("anovaTotalReads", totalReads.toString());
+    if (typeof window !== "undefined") localStorage.setItem("anovaTotalReads", totalReads.toString());
   }, [totalReads]);
   useEffect(() => {
-    localStorage.setItem("anovaTotalWrites", totalWrites.toString());
+    if (typeof window !== "undefined") localStorage.setItem("anovaTotalWrites", totalWrites.toString());
   }, [totalWrites]);
-
-  // Reset manuale
   const resetCounters = () => {
-    localStorage.removeItem("anovaTotalReads");
-    localStorage.removeItem("anovaTotalWrites");
+    if (typeof window !== "undefined") {
+      localStorage.removeItem("anovaTotalReads");
+      localStorage.removeItem("anovaTotalWrites");
+    }
     setTotalReads(0);
     setTotalWrites(0);
   };
 
-  // Funzioni rapide
-  const incRead = (n = 1) => setTotalReads((v) => v + n);
-  const incWrite = (n = 1) => setTotalWrites((v) => v + n);
+  // Cache in-memory e gestione listener dinamico
+  const cacheRef = useRef<SessionCache>({});
+  const activeMsgUnsubRef = useRef<null | (() => void)>(null);
+  const activeTitleUnsubRef = useRef<null | (() => void)>(null);
+  const delayedAttachTimerRef = useRef<null | number>(null);
 
-  // ⬇️ BLOCCO 14.3 — Bootstrap sessione
+  /* ---------------------------------------
+     Bootstrap: sessione persistente (opzione 2)
+     - riapre l'ultima sessione locale
+     - crea il doc se non esiste
+     --------------------------------------- */
   useEffect(() => {
-    let sid = localStorage.getItem("anovaSessionId");
-    if (!sid) {
-      sid = Date.now().toString();
-      localStorage.setItem("anovaSessionId", sid);
+    let sid: string | null = null;
+    if (typeof window !== "undefined") {
+      sid = localStorage.getItem("anovaSessionId");
+      if (!sid) {
+        sid = Date.now().toString();
+        localStorage.setItem("anovaSessionId", sid);
+      }
     }
     setSessionId(sid);
 
+    if (!sid) return;
     const sessRef = doc(db, "sessions", sid);
     setDoc(
       sessRef,
@@ -172,54 +200,163 @@ export default function ChatPage() {
     ).then(() => incWrite());
   }, []);
 
-  // ⬇️ BLOCCO 14.4 — Listener titolo sessione attiva
-  useEffect(() => {
-    if (!sessionId) return;
-    const sessRef = doc(db, "sessions", sessionId);
-    const unsub = onSnapshot(sessRef, (snap) => {
-      const data = snap.data() as SessionMeta | undefined;
-      setSessionTitle((data?.title || "") as string);
-      incRead();
-    });
-    return () => unsub();
-  }, [sessionId]);
-
-  // ⬇️ BLOCCO 14.5 — Listener messaggi (ultimi 50)
-  useEffect(() => {
-    if (!sessionId) return;
-    const messagesRef = collection(db, "sessions", sessionId, "messages");
-    const qy = query(messagesRef, orderBy("createdAt", "desc"), limit(50));
-    const unsub = onSnapshot(qy, (snap) => {
-      const m: Message[] = snap.docs.map((d) => ({
-        id: d.id,
-        ...(d.data() as Message),
-      }));
-      setMessages(m.reverse());
-      incRead(m.length);
-    });
-    return () => unsub();
-  }, [sessionId]);
-
-  // ⬇️ BLOCCO 14.6 — Listener Archivio + Cestino
+  /* ---------------------------------------
+     Listener Archivio + Cestino (Low Read Mode)
+     - usa docChanges per conteggiare letture reali
+     - aggiorna array senza rileggere tutto
+     --------------------------------------- */
   useEffect(() => {
     const sessionsRef = collection(db, "sessions");
     const qAll = query(sessionsRef, orderBy("updatedAt", "desc"), limit(100));
-    const unsub = onSnapshot(qAll, (snap) => {
-      const all: SessionMeta[] = snap.docs.map((d) => ({
-        id: d.id,
-        ...(d.data() as Omit<SessionMeta, "id">),
-      }));
-      setSessions(all.filter((s) => !s.deleted));
-      setTrashSessions(all.filter((s) => s.deleted));
-      incRead(all.length);
+
+    const unsub = onSnapshot(qAll, { includeMetadataChanges: false }, (snap) => {
+      const next: SessionMeta[] = [];
+      // Manteniamo un buffer lineare (compatibile con ordinamento)
+      snap.docs.forEach((d) => {
+        next.push({ id: d.id, ...(d.data() as Omit<SessionMeta, "id">) });
+      });
+      setSessions(next.filter((s) => !s.deleted));
+      setTrashSessions(next.filter((s) => s.deleted));
+
+      // conteggio letture realistiche: #docChanges
+      incRead(Math.max(1, snap.docChanges().length));
     });
+
     return () => unsub();
   }, []);
 
-  // ⬇️ BLOCCO 14.7 — Nuova sessione
+  /* ---------------------------------------
+     Gestione Listener per Sessione Attiva (Title + Messages)
+     - Cache Intelligente: se la sessione è "fresca" usa cache e ritarda il listener
+     - Low Read Mode: usa docChanges e aggiorna incrementale
+     --------------------------------------- */
+  useEffect(() => {
+    // cleanup listener precedente
+    if (activeMsgUnsubRef.current) {
+      activeMsgUnsubRef.current();
+      activeMsgUnsubRef.current = null;
+    }
+    if (activeTitleUnsubRef.current) {
+      activeTitleUnsubRef.current();
+      activeTitleUnsubRef.current = null;
+    }
+    if (delayedAttachTimerRef.current) {
+      window.clearTimeout(delayedAttachTimerRef.current);
+      delayedAttachTimerRef.current = null;
+    }
+
+    if (!sessionId) return;
+
+    // 1) Prova cache locale
+    const cached = cacheRef.current[sessionId];
+    const now = Date.now();
+    const fresh = cached && now - cached.ts < CACHE_TTL_MS;
+
+    if (fresh) {
+      // usa dati cache immediatamente, senza listener per ora
+      setMessages(cached.messages);
+      setSessionTitle(cached.title || "");
+      // attacca listener con ritardo = TTL residuo (così eviti letture ripetute entro finestra)
+      const delay = CACHE_TTL_MS - (now - cached.ts);
+      delayedAttachTimerRef.current = window.setTimeout(() => {
+        attachActiveTitleListener(sessionId);
+        attachActiveMessagesListener(sessionId);
+      }, Math.max(0, delay));
+      return;
+    }
+
+    // 2) Nessuna cache "fresca": attacca subito i listener
+    attachActiveTitleListener(sessionId);
+    attachActiveMessagesListener(sessionId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionId]);
+
+  // Helper: attach listener titolo (Low Read)
+  const attachActiveTitleListener = (sid: string) => {
+    const sessRef = doc(db, "sessions", sid);
+    activeTitleUnsubRef.current = onSnapshot(
+      sessRef,
+      { includeMetadataChanges: false },
+      (snap) => {
+        const t = (snap.data()?.title || "") as string;
+        setSessionTitle(t);
+        incRead(1);
+
+        // aggiorna cache titolo
+        cacheRef.current[sid] = {
+          messages: cacheRef.current[sid]?.messages || [],
+          title: t,
+          ts: Date.now(),
+        };
+      }
+    );
+  };
+
+  // Helper: attach listener messaggi (Low Read + incrementale)
+  const attachActiveMessagesListener = (sid: string) => {
+    const messagesRef = collection(db, "sessions", sid, "messages");
+    const qy = query(messagesRef, orderBy("createdAt", "desc"), limit(50));
+
+    activeMsgUnsubRef.current = onSnapshot(qy, { includeMetadataChanges: false }, (snap) => {
+      const changes = snap.docChanges();
+      setMessages((prev) => {
+        let updated = prev.length ? [...prev] : [];
+
+        // Se prev è vuoto, primo snapshot: carico tutto una volta
+        if (updated.length === 0) {
+          const first: Message[] = snap.docs
+            .map((d) => ({ id: d.id, ...(d.data() as Message) }))
+            .reverse();
+          updated = first;
+          // letture: contiamo i doc changes se presenti, altrimenti #docs
+          incRead(changes.length > 0 ? changes.length : first.length || 1);
+
+          // cache
+          cacheRef.current[sid] = {
+            messages: first,
+            title: cacheRef.current[sid]?.title || sessionTitle || "",
+            ts: Date.now(),
+          };
+          return first;
+        }
+
+        // Incrementale: applico solo i changes
+        for (const c of changes) {
+          const data = { id: c.doc.id, ...(c.doc.data() as Message) };
+          if (c.type === "added") {
+            // push e riordino per createdAt asc
+            if (!updated.find((m) => m.id === data.id)) updated.push(data);
+          } else if (c.type === "modified") {
+            const idx = updated.findIndex((m) => m.id === data.id);
+            if (idx !== -1) updated[idx] = data;
+          } else if (c.type === "removed") {
+            updated = updated.filter((m) => m.id !== data.id);
+          }
+        }
+
+        updated.sort((a, b) => (a.createdAt?.seconds || 0) - (b.createdAt?.seconds || 0));
+        incRead(Math.max(1, changes.length));
+
+        // cache
+        cacheRef.current[sid] = {
+          messages: updated,
+          title: cacheRef.current[sid]?.title || sessionTitle || "",
+          ts: Date.now(),
+        };
+
+        return updated;
+      });
+    });
+  };
+
+  /* ---------------------------------------
+     Nuova Sessione (reset + benvenuto)
+     --------------------------------------- */
   const handleNewSession = async () => {
     const newId = Date.now().toString();
-    localStorage.setItem("anovaSessionId", newId);
+    if (typeof window !== "undefined") {
+      localStorage.setItem("anovaSessionId", newId);
+    }
     setSessionId(newId);
 
     const sessRef = doc(db, "sessions", newId);
@@ -239,13 +376,18 @@ export default function ChatPage() {
     });
     incWrite();
 
+    // reset stato UI + cache
     setMessages([]);
     setSessionTitle("");
+    cacheRef.current[newId] = { messages: [], title: "", ts: Date.now() };
+
     setToastMessage("✅ Nuova sessione avviata");
     setTimeout(() => setToastMessage(null), 1800);
   };
 
-  // ⬇️ BLOCCO 14.8 — Rinomina (header + inline)
+  /* ---------------------------------------
+     Rinomina attiva + inline
+     --------------------------------------- */
   const commitActiveTitle = async () => {
     if (!sessionId) return;
     const clean = sessionTitle?.trim();
@@ -254,6 +396,12 @@ export default function ChatPage() {
       updatedAt: serverTimestamp(),
     });
     incWrite();
+    // sync cache
+    cacheRef.current[sessionId] = {
+      messages: cacheRef.current[sessionId]?.messages || [],
+      title: clean || "",
+      ts: Date.now(),
+    };
     setEditingTitle(false);
     setToastMessage("✏️ Titolo aggiornato");
     setTimeout(() => setToastMessage(null), 1200);
@@ -271,13 +419,35 @@ export default function ChatPage() {
       updatedAt: serverTimestamp(),
     });
     incWrite();
+    // se la stai rinominando e coincide con attiva, sincronizza cache/titolo live
+    if (id === sessionId) {
+      setSessionTitle(value);
+      cacheRef.current[id] = {
+        messages: cacheRef.current[id]?.messages || [],
+        title: value,
+        ts: Date.now(),
+      };
+    }
     setInlineEditId(null);
     setInlineEditValue("");
     setToastMessage("✏️ Titolo aggiornato");
     setTimeout(() => setToastMessage(null), 1000);
   };
 
-  // ⬇️ BLOCCO 14.9 — Cestina / Ripristina
+  /* ---------------------------------------
+     Apri / Cestina / Ripristina
+     --------------------------------------- */
+  const handleOpenSession = (id: string) => {
+    if (typeof window !== "undefined") {
+      localStorage.setItem("anovaSessionId", id);
+    }
+    setSessionId(id);
+    setShowArchive(false);
+    setShowTrash(false);
+    setToastMessage("📂 Sessione caricata");
+    setTimeout(() => setToastMessage(null), 1000);
+  };
+
   const handleDeleteSession = async (id: string) => {
     await updateDoc(doc(db, "sessions", id), {
       deleted: true,
@@ -298,7 +468,9 @@ export default function ChatPage() {
     setTimeout(() => setToastMessage(null), 1200);
   };
 
-  // ⬇️ BLOCCO 14.10 — Simulazione AI locale
+  /* ---------------------------------------
+     Simulazione AI locale (placeholder)
+     --------------------------------------- */
   const generateLocalResponse = (prompt: string) => {
     const lower = prompt.toLowerCase();
     if (lower.includes("ciao")) return "Ciao Luca. Sono pronta per lavorare insieme in Anova β.";
@@ -307,7 +479,9 @@ export default function ChatPage() {
     return "Ricevuto. Elaboro il contesto e preparo una risposta.";
   };
 
-  // ⬇️ BLOCCO 14.11 — Invio messaggi (+ meta update)
+  /* ---------------------------------------
+     Invio messaggi (+ meta update)
+     --------------------------------------- */
   const handleSend = async (e: React.FormEvent) => {
     e.preventDefault();
     const trimmed = input.trim();
@@ -328,7 +502,7 @@ export default function ChatPage() {
     incWrite();
 
     setInput("");
-    await new Promise((r) => setTimeout(r, 450));
+    await new Promise((r) => setTimeout(r, 420));
 
     const aiResponse = generateLocalResponse(trimmed);
     await addDoc(messagesRef, {
@@ -343,9 +517,18 @@ export default function ChatPage() {
       lastMessage: aiResponse,
     });
     incWrite();
+
+    // aggiorna cache locale messaggi (ottimizza rientri immediati)
+    cacheRef.current[sessionId] = {
+      messages: [...(cacheRef.current[sessionId]?.messages || []), { sender: "user", text: trimmed }, { sender: "anova", text: aiResponse }],
+      title: cacheRef.current[sessionId]?.title || sessionTitle || "",
+      ts: Date.now(),
+    };
   };
 
-  // ⬇️ BLOCCO 14.12 — Filtri ricerca archivio/cestino
+  /* ---------------------------------------
+     Filtri ricerca archivio/cestino
+     --------------------------------------- */
   const filteredArchive = useMemo(() => {
     const t = searchArchive.toLowerCase().trim();
     if (!t) return sessions;
@@ -368,7 +551,9 @@ export default function ChatPage() {
     });
   }, [trashSessions, searchTrash]);
 
-  // ⬇️ BLOCCO 14.13 — UI Completa
+  /* ---------------------------------------
+     UI Completa
+     --------------------------------------- */
   return (
     <main className="h-screen w-screen flex bg-black text-neutral-100 relative overflow-hidden">
       {/* ARCHIVIO */}
@@ -379,10 +564,7 @@ export default function ChatPage() {
       >
         <div className="px-5 py-4 flex items-center justify-between border-b border-neutral-800">
           <h3 className="text-base font-semibold">Archivio</h3>
-          <button
-            onClick={() => setShowArchive(false)}
-            className="text-sm text-neutral-400 hover:text-white"
-          >
+          <button onClick={() => setShowArchive(false)} className="text-sm text-neutral-400 hover:text-white">
             Chiudi
           </button>
         </div>
@@ -412,17 +594,13 @@ export default function ChatPage() {
                       className="flex-1 bg-neutral-900 border border-neutral-700 rounded px-2 py-1 text-sm"
                     />
                   ) : (
-                    <button onClick={() => setSessionId(s.id)} className="text-left text-sm flex-1">
-                      <div className="text-xs text-neutral-400">
-                        {s.title?.trim() ? s.title : `#${s.id.slice(-6)}`}
-                      </div>
+                    <button onClick={() => handleOpenSession(s.id)} className="text-left text-sm flex-1">
+                      <div className="text-xs text-neutral-400">{s.title?.trim() ? s.title : `#${s.id.slice(-6)}`}</div>
                       <div className="line-clamp-1 text-neutral-300">{s.lastMessage || "—"}</div>
                     </button>
                   )}
                   <button
-                    onClick={() =>
-                      inlineEditId === s.id ? commitInlineRename(s.id) : startInlineRename(s.id, s.title)
-                    }
+                    onClick={() => (inlineEditId === s.id ? commitInlineRename(s.id) : startInlineRename(s.id, s.title))}
                     className="text-neutral-400 hover:text-white text-xs px-2"
                     title="Rinomina"
                   >
@@ -450,10 +628,7 @@ export default function ChatPage() {
       >
         <div className="px-5 py-4 flex items-center justify-between border-b border-neutral-800">
           <h3 className="text-base font-semibold">Cestino</h3>
-          <button
-            onClick={() => setShowTrash(false)}
-            className="text-sm text-neutral-400 hover:text-white"
-          >
+          <button onClick={() => setShowTrash(false)} className="text-sm text-neutral-400 hover:text-white">
             Chiudi
           </button>
         </div>
@@ -484,16 +659,12 @@ export default function ChatPage() {
                     />
                   ) : (
                     <div className="flex-1">
-                      <div className="text-neutral-400 line-clamp-1">
-                        {s.title?.trim() ? s.title : `#${s.id.slice(-6)}`}
-                      </div>
+                      <div className="text-neutral-400 line-clamp-1">{s.title?.trim() ? s.title : `#${s.id.slice(-6)}`}</div>
                       <div className="text-neutral-600 text-xs line-clamp-1">{s.lastMessage || "—"}</div>
                     </div>
                   )}
                   <button
-                    onClick={() =>
-                      inlineEditId === s.id ? commitInlineRename(s.id) : startInlineRename(s.id, s.title)
-                    }
+                    onClick={() => (inlineEditId === s.id ? commitInlineRename(s.id) : startInlineRename(s.id, s.title))}
                     className="text-neutral-400 hover:text-white text-xs px-2"
                     title="Rinomina"
                   >
@@ -588,10 +759,7 @@ export default function ChatPage() {
         </section>
 
         {/* INPUT */}
-        <form
-          onSubmit={handleSend}
-          className="flex items-center gap-3 border-t border-neutral-800 px-6 py-4 bg-black"
-        >
+        <form onSubmit={handleSend} className="flex items-center gap-3 border-t border-neutral-800 px-6 py-4 bg-black">
           <input
             type="text"
             value={input}
@@ -599,10 +767,7 @@ export default function ChatPage() {
             placeholder="Scrivi un messaggio..."
             className="flex-1 bg-neutral-900 border border-neutral-800 rounded-lg px-4 py-2 text-sm focus:outline-none focus:border-white"
           />
-          <button
-            type="submit"
-            className="bg-white text-black font-medium px-5 py-2 rounded-lg hover:bg-neutral-200 transition"
-          >
+          <button type="submit" className="bg-white text-black font-medium px-5 py-2 rounded-lg hover:bg-neutral-200 transition">
             Invia
           </button>
         </form>
@@ -620,4 +785,6 @@ export default function ChatPage() {
     </main>
   );
 }
-// ⬆️ FINE BLOCCO 14.0 — v3.7 COMPLETO
+// ⬆️ FINE BLOCCO 14.0 — v3.9 (Cache Intelligente + Low Read Mode + Persistenza)
+  
+     
