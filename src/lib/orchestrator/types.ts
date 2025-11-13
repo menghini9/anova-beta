@@ -1,5 +1,5 @@
-// ⬇️ BLOCCO 1 — /src/lib/orchestrator/types.ts
-// ANOVA_ORCHESTRATOR_V42
+// ⬇️ BLOCCO 1.1 — /src/lib/orchestrator/types.ts (Intent esteso)
+// ANOVA_ORCHESTRATOR_V42_INTENT
 
 export type ProviderId = "openai" | "anthropic" | "gemini" | "mistral" | "llama" | "web";
 
@@ -17,6 +17,14 @@ export interface Intent {
   keywords: string[];
   original: string;         // prompt originale utente
   userId?: string;
+
+  // 🔎 Nuovi campi intelligenti
+  mode?: "chat" | "question" | "task" | "smalltalk";
+  isSmallTalk?: boolean;        // es. "ciao", "come stai"
+  isSimpleQuestion?: boolean;   // domanda semplice, oggettiva
+  needsClarification?: boolean; // richiesta ambigua (serve domanda in più)
+  clarificationType?: "anova_ambiguous" | "vague_goal" | "generic";
+  autoPromptNeeded?: boolean;   // conviene migliorare il prompt prima di interrogare le AI
 }
 
 export interface ProviderResponse {
@@ -49,4 +57,4 @@ export interface PerformanceSample {
   latencyMs: number;
   ts: number;
 }
-// ⬆️ FINE BLOCCO 1
+// ⬆️ FINE BLOCCO 1.1
