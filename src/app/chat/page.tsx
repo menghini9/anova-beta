@@ -129,6 +129,10 @@ export default function ChatPage() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+  // Debug tecnico AI (non persistente)
+  const [debugInfo, setDebugInfo] = useState<any | null>(null);
+
+  const bottomRef = useRef<HTMLDivElement | null>(null);
 
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [sessionTitle, setSessionTitle] = useState<string>("");
@@ -282,6 +286,11 @@ export default function ChatPage() {
     attachActiveMessagesListener(sessionId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId]);
+useEffect(() => {
+  if (bottomRef.current) {
+    bottomRef.current.scrollIntoView({ behavior: "smooth" });
+  }
+}, [messages]);
 
   // attach titolo
   const attachActiveTitleListener = (sid: string) => {
@@ -483,7 +492,7 @@ export default function ChatPage() {
   };
 
   // ---------------------------------------
-  // Invio messaggi (+ meta update)
+  // Invio messaggi (+ meta update + debug AI)
   // ---------------------------------------
   const handleSend = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -491,6 +500,8 @@ export default function ChatPage() {
     if (!trimmed || !sessionId) return;
 
     const messagesRef = collection(db, "sessions", sessionId, "messages");
+
+    // 1️⃣ Salvo il messaggio dell'utente
     await addDoc(messagesRef, {
       sender: "user",
       text: trimmed,
@@ -505,46 +516,48 @@ export default function ChatPage() {
     incWrite();
 
     setInput("");
-    await new Promise((r) => setTimeout(r, 420));
 
-   // ⬇️ BLOCCO 15 — Collegamento Anova β Orchestrator v4.2
-let aiResponse = "Elaborazione in corso...";
+    // 2️⃣ Chiamata all'orchestratore cognitivo
+    let aiResponse = "Elaborazione in corso...";
 
-try {
-  const res = await fetch("/api/orchestrate", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ prompt: trimmed, userId: sessionId }),
-  });
+    try {
+      const res = await fetch("/api/orchestrate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ prompt: trimmed, userId: sessionId }),
+      });
 
-  const data = await res.json();
+      const data = await res.json();
 
-  aiResponse =
-    data?.fusion?.finalText ||
-    "⚠️ Nessuna risposta utile dall'orchestratore.";
+      // salvo info di debug per il pannello tecnico
+      setDebugInfo(data);
 
-  console.log("🧠 ANOVA β — Risposta fusa:", data.fusion);
-} catch (err) {
-  console.error("Errore chiamata orchestratore:", err);
-  aiResponse = "❌ Errore nel motore cognitivo. Riprova.";
-}
+      aiResponse =
+        data?.fusion?.finalText ||
+        "⚠️ Nessuna risposta utile dall'orchestratore.";
 
-// salva la risposta fusa nel thread
-await addDoc(messagesRef, {
-  sender: "anova",
-  text: aiResponse,
-  createdAt: serverTimestamp(),
-});
-incWrite(2);
+      console.log("🧠 ANOVA β — Risposta fusa:", data.fusion);
+      console.log("🧠 ANOVA β — Meta:", data.meta);
+    } catch (err) {
+      console.error("Errore chiamata orchestratore:", err);
+      aiResponse = "❌ Errore nel motore cognitivo. Riprova.";
+    }
 
-await updateDoc(doc(db, "sessions", sessionId), {
-  updatedAt: serverTimestamp(),
-  lastMessage: aiResponse,
-});
-incWrite();
-// ⬆️ FINE BLOCCO 15
+    // 3️⃣ Salvo la risposta di ANOVA nel thread
+    await addDoc(messagesRef, {
+      sender: "anova",
+      text: aiResponse,
+      createdAt: serverTimestamp(),
+    });
+    incWrite(2);
 
-    // aggiorna cache
+    await updateDoc(doc(db, "sessions", sessionId), {
+      updatedAt: serverTimestamp(),
+      lastMessage: aiResponse,
+    });
+    incWrite();
+
+    // aggiorna cache locale
     cacheRef.current[sessionId] = {
       messages: [
         ...(cacheRef.current[sessionId]?.messages || []),
@@ -555,6 +568,7 @@ incWrite();
       ts: Date.now(),
     };
   };
+
 
   // ---------------------------------------
   // Filtri ricerca archivio/cestino
@@ -785,7 +799,7 @@ incWrite();
                 <p className="text-sm leading-relaxed whitespace-pre-wrap">{msg.text}</p>
               </div>
             ))
-          )}
+          )} <div ref={bottomRef} />
         </section>
 
         {/* INPUT */}
@@ -807,6 +821,71 @@ incWrite();
       {toastMessage && (
         <div className="fixed bottom-6 left-1/2 transform -translate-x-1/2 bg-neutral-800 text-white px-4 py-2 rounded-lg shadow-lg text-sm animate-fade z-50">
           {toastMessage}
+        </div>
+      )}
+      {/* PANNELLO TECNICO AI */}
+      {debugInfo && (
+        <div className="fixed top-20 left-4 z-40">
+          <details className="bg-neutral-900/95 backdrop-blur border border-neutral-800 rounded-xl p-3 text-xs text-neutral-200 w-[340px]">
+            <summary className="cursor-pointer select-none">
+              🧠 Dettagli AI (ANOVA β)
+            </summary>
+            <div className="mt-2 space-y-2">
+              <div className="text-[11px] text-neutral-400">
+                Modalità:{" "}
+                <span className="text-neutral-100">
+                  {debugInfo?.meta?.intent?.mode ?? "—"}
+                </span>
+              </div>
+              <div className="text-[11px] text-neutral-400">
+                Domain:{" "}
+                <span className="text-neutral-100">
+                  {debugInfo?.meta?.intent?.purpose ?? "—"}
+                </span>
+              </div>
+              <div className="text-[11px] text-neutral-400">
+                Small talk locale:{" "}
+                <span className="text-neutral-100">
+                  {debugInfo?.meta?.smallTalkHandled ? "✅" : "❌"}
+                </span>
+              </div>
+              <div className="text-[11px] text-neutral-400">
+                Chiarificazione usata:{" "}
+                <span className="text-neutral-100">
+                  {debugInfo?.meta?.clarificationUsed ? "✅" : "❌"}
+                </span>
+              </div>
+              <div className="text-[11px] text-neutral-400">
+                Auto-prompt usato:{" "}
+                <span className="text-neutral-100">
+                  {debugInfo?.meta?.autoPromptUsed ? "✅" : "❌"}
+                </span>
+              </div>
+
+              <div className="mt-2 border-t border-neutral-800 pt-2">
+                <div className="text-[11px] text-neutral-400 mb-1">
+                  Provider usati:
+                </div>
+                {Array.isArray(debugInfo?.fusion?.used) &&
+                debugInfo.fusion.used.length > 0 ? (
+                  <ul className="space-y-1">
+                    {debugInfo.fusion.used.map((u: any, idx: number) => (
+                      <li key={idx} className="flex justify-between">
+                        <span>{u.provider}</span>
+                        <span className="text-neutral-400">
+                          score {(u.score ?? 0).toFixed(2)} • {u.latencyMs}ms
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <div className="text-[11px] text-neutral-500">
+                    Nessun provider esterno (small talk o chiarificazione).
+                  </div>
+                )}
+              </div>
+            </div>
+          </details>
         </div>
       )}
 

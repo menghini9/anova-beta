@@ -1,7 +1,7 @@
 // ⬇️ BLOCCO 13.1 — /src/lib/orchestrator/index.ts
 // ANOVA_ORCHESTRATOR_V42_INTENT_REFINER
 
-import type { Intent, FusionResult, ProviderResponse } from "./types";
+import type { Intent, FusionResult, ProviderResponse, OrchestrationMeta } from "./types";
 import { fanout } from "./router";
 import { fuse } from "./fusion";
 import { logPerformance } from "./learn";
@@ -155,7 +155,9 @@ export async function getAIResponse(
 ): Promise<{
   fusion: FusionResult;
   raw: ProviderResponse[];
+  meta: OrchestrationMeta;
 }> {
+
   const intent = analyzeIntent(prompt, userId);
 
   // 1️⃣ Small talk: risposta locale, nessuna chiamata esterna
@@ -166,19 +168,36 @@ export async function getAIResponse(
       fusionScore: 1,
       used: [],
     };
-    return { fusion, raw: [] };
+
+    const meta: OrchestrationMeta = {
+      intent,
+      smallTalkHandled: true,
+      clarificationUsed: false,
+      autoPromptUsed: false,
+    };
+
+    return { fusion, raw: [], meta };
   }
 
   // 2️⃣ Richiesta ambigua: prima chiedo chiarimenti, poi eventualmente userò le AI
-  if (intent.needsClarification) {
+   if (intent.needsClarification) {
     const text = buildClarificationQuestion(intent);
     const fusion: FusionResult = {
       finalText: text,
       fusionScore: 1,
       used: [],
     };
-    return { fusion, raw: [] };
+
+    const meta: OrchestrationMeta = {
+      intent,
+      smallTalkHandled: false,
+      clarificationUsed: true,
+      autoPromptUsed: false,
+    };
+
+    return { fusion, raw: [], meta };
   }
+
 
   // 3️⃣ Costruisco eventuale auto-prompt per le AI
   const intentForProviders: Intent = {
@@ -204,6 +223,15 @@ export async function getAIResponse(
   );
 
   const fusion = fuse(raw);
-  return { fusion, raw };
+
+  const meta: OrchestrationMeta = {
+    intent,
+    smallTalkHandled: false,
+    clarificationUsed: false,
+    autoPromptUsed: !!intent.autoPromptNeeded,
+  };
+
+  return { fusion, raw, meta };
 }
+
 // ⬆️ FINE BLOCCO 13.1

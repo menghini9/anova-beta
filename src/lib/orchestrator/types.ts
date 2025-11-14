@@ -58,3 +58,13 @@ export interface PerformanceSample {
   ts: number;
 }
 // ⬆️ FINE BLOCCO 1.1
+// ⬇️ BLOCCO 1.2 — OrchestrationMeta (meta-informazioni per il pannello tecnico)
+// ANOVA_ORCHESTRATOR_V42_PANEL
+
+export interface OrchestrationMeta {
+  intent: Intent;
+  smallTalkHandled: boolean;     // true se la risposta è stata gestita localmente (no AI esterne)
+  clarificationUsed: boolean;    // true se è stata fatta una domanda di chiarimento
+  autoPromptUsed: boolean;       // true se è stato usato un auto-prompt arricchito per i provider
+}
+// ⬆️ FINE BLOCCO 1.2
