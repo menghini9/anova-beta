@@ -19,15 +19,6 @@ body {
   overscroll-behavior: none; /* blocca bounce su mobile */
 }
 
-/* --- Tema dinamico (facoltativo, mantenuto) --- */
-@media (prefers-color-scheme: light) {
-  html,
-  body {
-    background-color: #ffffff;
-    color: #171717;
-  }
-}
-
 /* --- Struttura base --- */
 * {
   box-sizing: border-box;

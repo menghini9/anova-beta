@@ -54,13 +54,63 @@ const safeRemove = (k: string) => {
 /* =========================================================
    🔢 Prezzi (piano Blaze indicativo)
    ========================================================= */
+/* =========================================================
+   🔢 Prezzi (piano Blaze indicativo)
+   ========================================================= */
 const PRICE_READS_PER_100K = 0.06;
 const PRICE_WRITES_PER_100K = 0.18;
+/* =========================================================
+   🤖 Prezzi simulati AI (per provider)
+   - Valori indicativi, SOLO per simulazione interna.
+   - La fatturazione reale dipende dai token e dal provider.
+   ========================================================= */
+
+type ProviderKey = "openai" | "anthropic" | "gemini" | "mistral" | "llama" | "web";
+
+interface ProviderUsage {
+  calls: number;
+  costUsd: number;
+}
+
+type AiUsage = Record<ProviderKey, ProviderUsage>;
+
+const AI_USAGE_LS_KEY = "anovaAiUsageV1";
+
+// 💰 Prezzi puramente dimostrativi (USD per 1000 token)
+const AI_PRICE_TABLE: Record<ProviderKey, { inPer1K: number; outPer1K: number }> = {
+  openai: { inPer1K: 0.003, outPer1K: 0.006 },
+  anthropic: { inPer1K: 0.003, outPer1K: 0.006 },
+  gemini: { inPer1K: 0.002, outPer1K: 0.004 },
+  mistral: { inPer1K: 0.002, outPer1K: 0.006 },
+  llama: { inPer1K: 0.001, outPer1K: 0.002 },
+  web: { inPer1K: 0.0005, outPer1K: 0.0005 }, // es. Tavily / SerpAPI
+};
+
+const EMPTY_AI_USAGE: AiUsage = {
+  openai: { calls: 0, costUsd: 0 },
+  anthropic: { calls: 0, costUsd: 0 },
+  gemini: { calls: 0, costUsd: 0 },
+  mistral: { calls: 0, costUsd: 0 },
+  llama: { calls: 0, costUsd: 0 },
+  web: { calls: 0, costUsd: 0 },
+};
+
+const PROVIDER_LABEL: Record<ProviderKey, string> = {
+  openai: "OpenAI GPT",
+  anthropic: "Anthropic Claude",
+  gemini: "Google Gemini",
+  mistral: "Mistral Large",
+  llama: "Meta Llama",
+  web: "Web Search",
+};
+// ⬆️ FINE BLOCCO COSTI AI // <---
+
 
 /* =========================================================
    💸 Pannello Costi (cumulativo persistente)
    ========================================================= */
-function CostPanel({
+// ⬇️ BLOCCO 14.1 — Pannello costi Firestore
+function FirestoreCostPanel({
   totalReads,
   totalWrites,
   onReset,
@@ -76,7 +126,9 @@ function CostPanel({
   return (
     <div className="fixed bottom-4 right-4 z-40">
       <details className="bg-neutral-900/95 backdrop-blur border border-neutral-800 rounded-xl p-3 text-sm text-neutral-200 w-[320px]">
-        <summary className="cursor-pointer select-none">💸 Costi Firestore (totali)</summary>
+        <summary className="cursor-pointer select-none">
+          💸 Costi Firestore (totali)
+        </summary>
         <div className="mt-2 space-y-2">
           <div className="text-xs text-neutral-400">
             Stima cumulativa locale (persistente). Non è il billing reale.
@@ -84,23 +136,35 @@ function CostPanel({
           <div className="grid grid-cols-2 gap-2">
             <div className="bg-neutral-950 border border-neutral-800 rounded-lg p-2">
               <div className="text-[11px] text-neutral-500">Tot. letture</div>
-              <div className="text-base">{totalReads.toLocaleString()}</div>
+              <div className="text-base">
+                {totalReads.toLocaleString()}
+              </div>
             </div>
             <div className="bg-neutral-950 border border-neutral-800 rounded-lg p-2">
               <div className="text-[11px] text-neutral-500">Tot. scritture</div>
-              <div className="text-base">{totalWrites.toLocaleString()}</div>
+              <div className="text-base">
+                {totalWrites.toLocaleString()}
+              </div>
             </div>
           </div>
           <div className="bg-neutral-950 border border-neutral-800 rounded-lg p-2">
             <div className="text-[11px] text-neutral-500">Costo stimato</div>
             <div className="text-base font-medium text-green-400">
-              {costTotal.toLocaleString(undefined, { style: "currency", currency: "USD", minimumFractionDigits: 4 })}
+              {costTotal.toLocaleString(undefined, {
+                style: "currency",
+                currency: "USD",
+                minimumFractionDigits: 4,
+              })}
             </div>
             <div className="text-[11px] text-neutral-500">
-              (Letture: {costReads.toFixed(4)} • Scritture: {costWrites.toFixed(4)})
+              (Letture: {costReads.toFixed(4)} • Scritture:{" "}
+              {costWrites.toFixed(4)})
             </div>
           </div>
-          <button onClick={onReset} className="mt-3 text-xs text-red-400 hover:text-red-300">
+          <button
+            onClick={onReset}
+            className="mt-3 text-xs text-red-400 hover:text-red-300"
+          >
             🔄 Azzera contatore locale
           </button>
         </div>
@@ -108,6 +172,83 @@ function CostPanel({
     </div>
   );
 }
+// ⬆️ FINE BLOCCO 14.1
+
+// ⬇️ BLOCCO 14.2 — Pannello costi AI (simulati)
+function AICostPanel({ aiUsage }: { aiUsage: AiUsage }) {
+  const providers = Object.keys(aiUsage) as ProviderKey[];
+
+  const totalCalls = providers.reduce(
+    (acc, p) => acc + aiUsage[p].calls,
+    0
+  );
+  const totalCost = providers.reduce(
+    (acc, p) => acc + aiUsage[p].costUsd,
+    0
+  );
+
+  return (
+    <div className="fixed bottom-4 right-[360px] z-40">
+      <details className="bg-neutral-900/95 backdrop-blur border border-neutral-800 rounded-xl p-3 text-sm text-neutral-200 w-[340px]">
+        <summary className="cursor-pointer select-none">
+          🤖 Costi AI (simulati)
+        </summary>
+        <div className="mt-2 space-y-2">
+          <div className="text-[11px] text-neutral-400">
+            Simulazione indicativa: calcolo per chiamata in base alla
+            lunghezza dei messaggi. Non usare per contabilità reale.
+          </div>
+
+          <div className="space-y-1 max-h-64 overflow-y-auto pr-1">
+            {providers.map((p) => (
+              <div
+                key={p}
+                className="flex items-center justify-between bg-neutral-950 border border-neutral-800 rounded-lg px-2 py-1"
+              >
+                <div className="flex flex-col">
+                  <span className="text-[11px] text-neutral-400">
+                    {PROVIDER_LABEL[p]}
+                  </span>
+                  <span className="text-[11px] text-neutral-500">
+                    {aiUsage[p].calls.toLocaleString()} chiamate
+                  </span>
+                </div>
+                <div className="text-xs font-medium text-green-400">
+                  {aiUsage[p].costUsd.toLocaleString(undefined, {
+                    style: "currency",
+                    currency: "USD",
+                    minimumFractionDigits: 4,
+                  })}
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <div className="bg-neutral-950 border border-neutral-800 rounded-lg p-2">
+            <div className="text-[11px] text-neutral-500">
+              Totale chiamate AI
+            </div>
+            <div className="text-base">
+              {totalCalls.toLocaleString()}
+            </div>
+            <div className="text-[11px] text-neutral-500 mt-1">
+              Spesa stimata complessiva
+            </div>
+            <div className="text-base font-medium text-green-400">
+              {totalCost.toLocaleString(undefined, {
+                style: "currency",
+                currency: "USD",
+                minimumFractionDigits: 4,
+              })}
+            </div>
+          </div>
+        </div>
+      </details>
+    </div>
+  );
+}
+// ⬆️ FINE BLOCCO 14.2
+
 
 /* =========================================================
    🧠 Cache Intelligente (in-memory)
@@ -155,6 +296,8 @@ export default function ChatPage() {
   // Contatori persistenti (inizializzati a 0, poi caricati in useEffect)
   const [totalReads, setTotalReads] = useState<number>(0);
   const [totalWrites, setTotalWrites] = useState<number>(0);
+  // Uso cumulativo delle AI (simulato, persistente in localStorage)
+  const [aiUsage, setAiUsage] = useState<AiUsage>(EMPTY_AI_USAGE);
 
   // Helpers costo
   const incRead = (n = 1) => setTotalReads((v) => v + n);
@@ -285,7 +428,20 @@ export default function ChatPage() {
     attachActiveTitleListener(sessionId);
     attachActiveMessagesListener(sessionId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessionId]);
+  },
+  [sessionId]);
+    useEffect(() => {
+    if (!hasWindow()) return;
+    const raw = safeGet(AI_USAGE_LS_KEY);
+    if (!raw) return;
+    try {
+      const parsed = JSON.parse(raw);
+      setAiUsage((prev) => ({ ...prev, ...parsed }));
+    } catch {
+      // se il JSON è corrotto, riparto da zero
+    }
+  }, []);
+
 useEffect(() => {
   if (bottomRef.current) {
     bottomRef.current.scrollIntoView({ behavior: "smooth" });
@@ -363,6 +519,45 @@ useEffect(() => {
 
         return updated;
       });
+    });
+  };
+  // ---------------------------------------
+  // Aggiornamento costi AI (simulazione)
+  // ---------------------------------------
+  const updateAiUsageFromRaw = (raw: any[], originalPrompt: string) => {
+    if (!Array.isArray(raw) || raw.length === 0) return;
+
+    // stima grezza: ~4 caratteri = 1 token
+    const inputTokens = Math.ceil(originalPrompt.length / 4);
+
+    setAiUsage((prev) => {
+      const next: AiUsage = { ...prev };
+
+      raw.forEach((r) => {
+        if (!r?.provider) return;
+
+        const key = String(r.provider).toLowerCase() as ProviderKey;
+        if (!AI_PRICE_TABLE[key]) return;
+
+        const outText = String(r.text ?? "");
+        const outputTokens = Math.ceil(outText.length / 4);
+
+        const prices = AI_PRICE_TABLE[key];
+        const cost =
+          (inputTokens / 1000) * prices.inPer1K +
+          (outputTokens / 1000) * prices.outPer1K;
+
+        const current = next[key] ?? { calls: 0, costUsd: 0 };
+        next[key] = {
+          calls: current.calls + 1,
+          costUsd: current.costUsd + cost,
+        };
+      });
+
+      if (hasWindow()) {
+        safeSet(AI_USAGE_LS_KEY, JSON.stringify(next));
+      }
+      return next;
     });
   };
 
@@ -494,6 +689,23 @@ useEffect(() => {
   // ---------------------------------------
   // Invio messaggi (+ meta update + debug AI)
   // ---------------------------------------
+  async function safeFetchAI(prompt: string) {
+  for (let i = 0; i < 2; i++) {
+    try {
+      const res = await fetch("/api/orchestrate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ prompt }),
+      });
+      if (!res.ok) throw new Error("Response error");
+      return await res.json();
+    } catch (e) {
+      await new Promise(r => setTimeout(r, 200)); // retry dopo 200ms
+    }
+  }
+  throw new Error("AI unreachable");
+}
+
   const handleSend = async (e: React.FormEvent) => {
     e.preventDefault();
     const trimmed = input.trim();
@@ -599,7 +811,8 @@ useEffect(() => {
   // UI Completa
   // ---------------------------------------
   return (
-    <main className="h-screen w-screen flex bg-black text-neutral-100 relative overflow-hidden">
+   <main className="h-screen w-screen flex bg-black text-neutral-100 relative overflow-x-hidden">
+
       {/* ARCHIVIO */}
       <aside
         className={`fixed top-0 left-0 h-full w-80 bg-neutral-950 border-r border-neutral-800 z-40 transition-transform duration-300 ${
@@ -825,7 +1038,7 @@ useEffect(() => {
       )}
       {/* PANNELLO TECNICO AI */}
       {debugInfo && (
-        <div className="fixed top-20 left-4 z-40">
+        <div className="fixed top-20 left-4 z-[9999] w-[320px]">
           <details className="bg-neutral-900/95 backdrop-blur border border-neutral-800 rounded-xl p-3 text-xs text-neutral-200 w-[340px]">
             <summary className="cursor-pointer select-none">
               🧠 Dettagli AI (ANOVA β)
@@ -861,6 +1074,13 @@ useEffect(() => {
                   {debugInfo?.meta?.autoPromptUsed ? "✅" : "❌"}
                 </span>
               </div>
+              
+              <div className="text-[11px] text-neutral-400">
+                Chiamate AI per questa richiesta:{" "}
+                <span className="text-neutral-100">
+                  {debugInfo?.stats?.callsThisRequest ?? 0}
+                </span>
+              </div>
 
               <div className="mt-2 border-t border-neutral-800 pt-2">
                 <div className="text-[11px] text-neutral-400 mb-1">
@@ -889,9 +1109,18 @@ useEffect(() => {
         </div>
       )}
 
-      {/* PANNELLO COSTI */}
-      <CostPanel totalReads={totalReads} totalWrites={totalWrites} onReset={resetCounters} />
-    </main>
+             {/* PANNELLO COSTI FIRESTORE */}
+      <FirestoreCostPanel
+        totalReads={totalReads}
+        totalWrites={totalWrites}
+        onReset={resetCounters}
+      />
+
+      {/* PANNELLO COSTI AI (SIMULATI) */}
+      <AICostPanel aiUsage={aiUsage} />
+
+    </main>   //* ⬅️ CHIUSURA MAIN MANCANTE */
   );
-}
+}             {/* ⬅️ CHIUSURA FUNZIONE */}
+
 // ⬆️ FINE BLOCCO 14.0 — v4.1

@@ -27,14 +27,39 @@ export function pickProviders(intent: Intent): ProviderId[] {
   return ranked.slice(0, PARALLEL_FANOUT);
 }
 
-export async function fanout(intent: Intent): Promise<ProviderResponse[]> {
+// ⬇️ BLOCCO 10 — fanout ESTESO con logging chiamate AI
+export async function fanout(intent: Intent): Promise<{
+  results: ProviderResponse[];
+  stats: {
+    callsThisRequest: number;
+    providersRequested: ProviderId[];
+  };
+}> {
   const providers = pickProviders(intent);
+
   const calls = providers.map((p) => INVOKERS[p](intent.original));
+
   const settled = await Promise.allSettled(calls);
-  return settled.map((s, i) =>
+
+  const results = settled.map((s, i) =>
     s.status === "fulfilled"
       ? s.value
-      : { provider: providers[i], text: "", latencyMs: 0, success: false, error: "rejected" }
+      : {
+          provider: providers[i],
+          text: "",
+          latencyMs: 0,
+          success: false,
+          error: "rejected",
+        }
   );
+
+  return {
+    results,
+    stats: {
+      callsThisRequest: providers.length,
+      providersRequested: providers,
+    },
+  };
 }
+
 // ⬆️ FINE BLOCCO 10

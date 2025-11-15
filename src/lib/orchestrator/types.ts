@@ -63,8 +63,15 @@ export interface PerformanceSample {
 
 export interface OrchestrationMeta {
   intent: Intent;
-  smallTalkHandled: boolean;     // true se la risposta è stata gestita localmente (no AI esterne)
-  clarificationUsed: boolean;    // true se è stata fatta una domanda di chiarimento
-  autoPromptUsed: boolean;       // true se è stato usato un auto-prompt arricchito per i provider
+  smallTalkHandled: boolean;
+  clarificationUsed: boolean;
+  autoPromptUsed: boolean;
+
+  // 🆕 stats per pannello tecnico AI
+  stats?: {
+    callsThisRequest: number;
+    providersRequested: ProviderId[];
+  };
 }
+
 // ⬆️ FINE BLOCCO 1.2

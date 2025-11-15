@@ -205,7 +205,8 @@ export async function getAIResponse(
     original: buildAutoPrompt(intent),
   };
 
-  const raw = await fanout(intentForProviders);
+  const { results: raw, stats } = await fanout(intentForProviders);
+
 
   // log minimo performance (solo success)
   await Promise.all(
@@ -225,11 +226,13 @@ export async function getAIResponse(
   const fusion = fuse(raw);
 
   const meta: OrchestrationMeta = {
-    intent,
-    smallTalkHandled: false,
-    clarificationUsed: false,
-    autoPromptUsed: !!intent.autoPromptNeeded,
-  };
+  intent,
+  smallTalkHandled: false,
+  clarificationUsed: false,
+  autoPromptUsed: !!intent.autoPromptNeeded,
+  stats, // 🆕 aggiunto
+};
+
 
   return { fusion, raw, meta };
 }

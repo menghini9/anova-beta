@@ -1,5 +1,5 @@
 // ⬇️ BLOCCO 4 — /src/lib/orchestrator/providers/openai.ts
-// ANOVA_ORCHESTRATOR_V42
+// ANOVA_ORCHESTRATOR_V43_COST_TRACKING
 
 import { withTimeout } from "./_base";
 import type { ProviderResponse } from "../types";
@@ -11,7 +11,6 @@ export async function invokeOpenAI(prompt: string): Promise<ProviderResponse> {
     const key = process.env.OPENAI_API_KEY;
     if (!key) throw new Error("OPENAI_API_KEY missing");
 
-    // Minimal call (text-only). Adatta a gpt-4.1/gpt-5 quando disponibile.
     const r = await withTimeout(
       fetch("https://api.openai.com/v1/chat/completions", {
         method: "POST",
@@ -33,12 +32,32 @@ export async function invokeOpenAI(prompt: string): Promise<ProviderResponse> {
       r?.choices?.[0]?.text ??
       "";
 
+    // -------------------------------
+    // 📌 TOKEN + COSTO STIMATO
+    // -------------------------------
+    const usage = r?.usage || {};
+    const promptTokens = usage.prompt_tokens ?? 0;
+    const completionTokens = usage.completion_tokens ?? 0;
+    const totalTokens = promptTokens + completionTokens;
+
+    // Prezzi indicativi GPT-4o-mini (base OpenAI, simulazione)
+    // Prompt: 0.00000015$ / token — Completion: 0.00000060$ / token
+    const cost =
+      promptTokens * 0.00000015 +
+      completionTokens * 0.00000060;
+
     return {
       provider: "openai",
       text,
       latencyMs: Date.now() - t0,
       success: Boolean(text),
       error: text ? undefined : "empty_response",
+
+      // 🆕 CAMPI AGGIUNTI
+      tokensUsed: totalTokens,
+      estimatedCost: cost,
+      promptTokens,
+      completionTokens,
     };
   } catch (e: any) {
     return {
@@ -47,6 +66,12 @@ export async function invokeOpenAI(prompt: string): Promise<ProviderResponse> {
       latencyMs: Date.now() - t0,
       success: false,
       error: e?.message ?? "unknown",
+
+      // In caso di errore forniamo dati vuoti
+      tokensUsed: 0,
+      estimatedCost: 0,
+      promptTokens: 0,
+      completionTokens: 0,
     };
   }
 }
