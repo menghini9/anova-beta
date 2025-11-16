@@ -19,6 +19,12 @@ import {
   limit,
 } from "firebase/firestore";
 import { db } from "@/lib/firebase";
+import type { AiUsage, ProviderKey } from "@/types/ai";
+import { EMPTY_AI_USAGE } from "@/types/ai";
+
+import AICostPanel from "@/components/panels/AICostPanel";
+import FirestoreCostPanel from "@/components/panels/FirestoreCostPanel";
+import AITechPanel from "@/components/panels/AITechPanel";
 
 /* =========================================================
    🧩 Tipi
@@ -54,80 +60,8 @@ const safeRemove = (k: string) => {
 /* =========================================================
    🔢 Prezzi (piano Blaze indicativo)
    ========================================================= */
-/* =========================================================
-   🔢 Prezzi (piano Blaze indicativo)
-   ========================================================= */
 const PRICE_READS_PER_100K = 0.06;
 const PRICE_WRITES_PER_100K = 0.18;
-/* =========================================================
-   💸 Pannello Costi (cumulativo persistente)
-   ========================================================= */
-// ⬇️ BLOCCO 14.1 — Pannelli costi Firestore + AI (ANOVA β)
-
-// 💰 Pannello costi Firestore (solo costo, niente contatori a schermo)
-function FirestoreCostPanel({
-  totalReads,
-  totalWrites,
-  onReset,
-}: {
-  totalReads: number;
-  totalWrites: number;
-  onReset: () => void;
-}) {
-  const costReads = (totalReads / 100_000) * PRICE_READS_PER_100K;
-  const costWrites = (totalWrites / 100_000) * PRICE_WRITES_PER_100K;
-  const costTotal = costReads + costWrites;
-
-  return (
-    <div className="fixed bottom-4 right-4 z-40">
-      <details className="bg-neutral-900/95 backdrop-blur border border-neutral-800 rounded-xl p-3 text-xs text-neutral-200 w-[260px]">
-        <summary className="cursor-pointer select-none">
-          💸 Costi Firestore (stima)
-        </summary>
-        <div className="mt-2 space-y-2">
-          <div className="text-[11px] text-neutral-400">
-            Stima locale cumulativa. Non è il billing reale.
-          </div>
-          <div className="bg-neutral-950 border border-neutral-800 rounded-lg p-2">
-            <div className="text-[11px] text-neutral-500">Totale stimato</div>
-            <div className="text-sm font-semibold text-green-400">
-              {costTotal.toLocaleString(undefined, {
-                style: "currency",
-                currency: "USD",
-                minimumFractionDigits: 5,
-              })}
-            </div>
-            <div className="text-[10px] text-neutral-500 mt-1">
-              Letture: {costReads.toFixed(5)} • Scritture: {costWrites.toFixed(5)}
-            </div>
-          </div>
-          <button
-            onClick={onReset}
-            className="mt-2 text-[11px] text-red-400 hover:text-red-300"
-          >
-            🔄 Azzera contatore locale Firestore
-          </button>
-        </div>
-      </details>
-    </div>
-  );
-}
-
-// 📊 Tipi per l'uso AI cumulativo
-type ProviderKey = "openai" | "anthropic" | "gemini" | "mistral" | "llama" | "web";
-
-type ProviderUsage = {
-  calls: number;
-  costUsd: number;
-  tokens: number;
-};
-
-export interface AiUsage {
-  totalCalls: number;
-  totalCostUsd: number;
-  totalTokens: number;
-  perProvider: Record<ProviderKey, ProviderUsage>;
-}
 
 // ⬇️ BLOCCO 14.1.A — Costanti AI mancanti (ripristinate)
 // 🔐 Chiave per salvare su localStorage
@@ -142,96 +76,6 @@ const AI_PRICE_TABLE: Record<ProviderKey, { inPer1K: number; outPer1K: number }>
   llama: { inPer1K: 0.001, outPer1K: 0.002 },
   web: { inPer1K: 0.0005, outPer1K: 0.0005 },
 };
-// ⬆️ FINE BLOCCO 14.1.A
-
-
-// Stato vuoto iniziale
-export const EMPTY_AI_USAGE: AiUsage = {
-  totalCalls: 0,
-  totalCostUsd: 0,
-  totalTokens: 0,
-  perProvider: {
-    openai: { calls: 0, costUsd: 0, tokens: 0 },
-    anthropic: { calls: 0, costUsd: 0, tokens: 0 },
-    gemini: { calls: 0, costUsd: 0, tokens: 0 },
-    mistral: { calls: 0, costUsd: 0, tokens: 0 },
-    llama: { calls: 0, costUsd: 0, tokens: 0 },
-    web: { calls: 0, costUsd: 0, tokens: 0 },
-  },
-};
-
-// 💰 Pannello costi AI cumulativi
-function AICostPanel({ aiUsage }: { aiUsage: AiUsage }) {
-  const providers: ProviderKey[] = [
-    "openai",
-    "anthropic",
-    "gemini",
-    "mistral",
-    "llama",
-    "web",
-  ];
-
-  return (
-    <div className="fixed bottom-4 left-4 z-40">
-      <details className="bg-neutral-900/95 backdrop-blur border border-neutral-800 rounded-xl p-3 text-xs text-neutral-200 w-[280px]">
-        <summary className="cursor-pointer select-none">
-          🤖 Costi AI (stima cumulativa)
-        </summary>
-        <div className="mt-2 space-y-2">
-          <div className="text-[11px] text-neutral-400">
-            Stima locale basata su token. Non considera free tier/crediti.
-          </div>
-
-          {/* Totale complessivo */}
-          <div className="bg-neutral-950 border border-neutral-800 rounded-lg p-2">
-            <div className="text-[11px] text-neutral-500">
-              Totale stimato (tutte le AI)
-            </div>
-            <div className="text-sm font-semibold text-green-400">
-              {aiUsage.totalCostUsd.toLocaleString(undefined, {
-                style: "currency",
-                currency: "USD",
-                minimumFractionDigits: 5,
-              })}
-            </div>
-            <div className="text-[10px] text-neutral-500 mt-1">
-              Chiamate totali: {aiUsage.totalCalls.toLocaleString()} • Tokens:{" "}
-              {aiUsage.totalTokens.toLocaleString()}
-            </div>
-          </div>
-
-          {/* Dettaglio per provider */}
-          <div className="space-y-1 max-h-48 overflow-y-auto">
-            {providers.map((p) => {
-              const u = aiUsage.perProvider[p];
-              if (!u) return null;
-              return (
-                <div
-                  key={p}
-                  className="bg-neutral-950 border border-neutral-800 rounded-lg p-2"
-                >
-                  <div className="flex justify-between items-center">
-                    <span className="text-[11px] font-semibold uppercase">
-                      {p}
-                    </span>
-                    <span className="text-[11px] text-green-400">
-                      {u.costUsd.toFixed(5)} $
-                    </span>
-                  </div>
-                  <div className="text-[10px] text-neutral-500 mt-1">
-                    Chiamate: {u.calls.toLocaleString()} • Tokens:{" "}
-                    {u.tokens.toLocaleString()}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      </details>
-    </div>
-  );
-}
-// ⬆️ FINE BLOCCO 14.1
 
 // ⬆️ FINE BLOCCO 14.2
 
@@ -250,9 +94,14 @@ const CACHE_TTL_MS = 30_000;
    ⛳ Pagina Chat
    ========================================================= */
 export default function ChatPage() {
-  // ---------------------------------------
+
+const [hydrated, setHydrated] = useState(false);
+
+useEffect(() => {
+  setHydrated(true);
+}, []);
+
   // Stati principali (NO accessi a localStorage in init!)
-  // ---------------------------------------
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [toastMessage, setToastMessage] = useState<string | null>(null);
@@ -279,11 +128,35 @@ export default function ChatPage() {
   const [searchArchive, setSearchArchive] = useState("");
   const [searchTrash, setSearchTrash] = useState("");
 
+  // Modali pannelli
+const [showTechPanel, setShowTechPanel] = useState(false);
+const [showAICostPanel, setShowAICostPanel] = useState(false);
+const [showFirestorePanel, setShowFirestorePanel] = useState(false);
+
+const [showPanelsMenu, setShowPanelsMenu] = useState(false);
+
+
   // Contatori persistenti (inizializzati a 0, poi caricati in useEffect)
   const [totalReads, setTotalReads] = useState<number>(0);
   const [totalWrites, setTotalWrites] = useState<number>(0);
-  // Uso cumulativo delle AI (simulato, persistente in localStorage)
-  const [aiUsage, setAiUsage] = useState<AiUsage>(EMPTY_AI_USAGE);
+  
+// Uso cumulativo delle AI (simulato, persistente)
+const [aiUsage, setAiUsage] = useState<AiUsage>(() => {
+  if (!hasWindow()) return EMPTY_AI_USAGE;
+
+// Modali pannelli
+  try {
+    const raw = safeGet("anovaAiUsageV1");
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      return parsed;
+    }
+  } catch {
+    // se c'è qualcosa di corrotto, ripartiamo puliti
+  }
+
+  return EMPTY_AI_USAGE;
+});
 
   // Helpers costo
   const incRead = (n = 1) => setTotalReads((v) => v + n);
@@ -299,21 +172,13 @@ export default function ChatPage() {
     safeSet("anovaTotalWrites", String(totalWrites));
   }, [totalWrites]);
 
-// 🔁 Persistenza uso AI (mai azzerato automaticamente)
+// 💾 Salva sempre ogni cambiamento in localStorage
 useEffect(() => {
   if (!hasWindow()) return;
-  const saved = safeGet("anovaAiUsageV1");
-  if (saved) {
-    try {
-      const parsed = JSON.parse(saved);
-      setAiUsage(parsed);
-    } catch {
-      // se rotto, ripartiamo da zero
-      setAiUsage(EMPTY_AI_USAGE);
-    }
-  }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-}, []);
+  safeSet("anovaAiUsageV1", JSON.stringify(aiUsage));
+}, [aiUsage]);
+
+
 
 useEffect(() => {
   if (!hasWindow()) return;
@@ -1023,26 +888,80 @@ const handleSend = async (e: React.FormEvent) => {
             </div>
           </div>
           <div className="flex items-center gap-3">
-            <button
-              onClick={() => setShowArchive((v) => !v)}
-              className="px-3 py-1 text-sm border border-neutral-700 rounded-lg hover:bg-neutral-900 transition"
-            >
-              Archivio
-            </button>
-            <button
-              onClick={() => setShowTrash((v) => !v)}
-              className="px-3 py-1 text-sm border border-neutral-700 rounded-lg hover:bg-neutral-900 transition"
-            >
-              Cestino
-            </button>
-            <button
-              onClick={handleNewSession}
-              className="px-3 py-1 text-sm border border-neutral-700 rounded-lg hover:bg-neutral-900 transition"
-            >
-              Nuova Chat
-            </button>
-          </div>
-        </header>
+
+  {/* Archivio */}
+  <button
+    onClick={() => setShowArchive((v) => !v)}
+    className="px-3 py-1 text-sm border border-neutral-700 rounded-lg hover:bg-neutral-900 transition"
+  >
+    Archivio
+  </button>
+
+  {/* Cestino */}
+  <button
+    onClick={() => setShowTrash((v) => !v)}
+    className="px-3 py-1 text-sm border border-neutral-700 rounded-lg hover:bg-neutral-900 transition"
+  >
+    Cestino
+  </button>
+
+{/* ▼ MENU PANNELLI */}
+{/* ▼ MENU PANNELLI (click-toggle, stabile) */}
+<div className="relative">
+  <button
+    onClick={() => setShowPanelsMenu(prev => !prev)}
+    className="px-3 py-1 text-sm border border-neutral-700 rounded-lg hover:bg-neutral-900 transition cursor-pointer select-none"
+  >
+    Pannelli ▼
+  </button>
+
+  {showPanelsMenu && (
+    <div
+      className="absolute left-0 mt-2 w-56 bg-neutral-900 border border-neutral-700 rounded-lg shadow-xl z-50 p-2 space-y-1"
+    >
+      <button
+        onClick={() => {
+          setShowPanelsMenu(false);
+          setShowTechPanel(true);
+        }}
+        className="block w-full text-left px-3 py-2 text-sm hover:bg-neutral-800 rounded-lg"
+      >
+        🧠 Pannello Tecnico AI
+      </button>
+
+      <button
+        onClick={() => {
+          setShowPanelsMenu(false);
+          setShowAICostPanel(true);
+        }}
+        className="block w-full text-left px-3 py-2 text-sm hover:bg-neutral-800 rounded-lg"
+      >
+        🤖 Costi AI
+      </button>
+
+      <button
+        onClick={() => {
+          setShowPanelsMenu(false);
+          setShowFirestorePanel(true);
+        }}
+        className="block w-full text-left px-3 py-2 text-sm hover:bg-neutral-800 rounded-lg"
+      >
+        🔥 Costi Firestore
+      </button>
+    </div>
+  )}
+</div>
+
+
+  {/* Nuova Chat */}
+  <button
+    onClick={handleNewSession}
+    className="px-3 py-1 text-sm border border-neutral-700 rounded-lg hover:bg-neutral-900 transition"
+  >
+    Nuova Chat
+  </button>
+</div>
+</header>
 
         {/* AREA MESSAGGI */}
         <section className="flex-1 overflow-y-auto p-6 space-y-4">
@@ -1087,149 +1006,30 @@ const handleSend = async (e: React.FormEvent) => {
           {toastMessage}
         </div>
       )}
-      {/* PANNELLO TECNICO AI */}
-{/* ⬇️ PANNELLO TECNICO AI (esteso v1) */}
-{debugInfo && (
-  <div className="fixed top-20 left-4 z-[9999] w-[330px]">
-    <details className="bg-neutral-900/95 backdrop-blur border border-neutral-800 rounded-xl p-3 text-xs text-neutral-200 w-[340px]">
-      <summary className="cursor-pointer select-none">
-        🧠 Dettagli AI (ANOVA β)
-      </summary>
-
-      <div className="mt-2 space-y-2">
-
-        {/* Modalità */}
-        <div className="text-[11px] text-neutral-400">
-          Modalità:{" "}
-          <span className="text-neutral-100">
-            {debugInfo?.meta?.intent?.mode ?? "—"}
-          </span>
-        </div>
-
-        {/* Domain */}
-        <div className="text-[11px] text-neutral-400">
-          Domain:{" "}
-          <span className="text-neutral-100">
-            {debugInfo?.meta?.intent?.purpose ?? "—"}
-          </span>
-        </div>
-
-        {/* Smalltalk */}
-        <div className="text-[11px] text-neutral-400">
-          Small talk locale:{" "}
-          <span className="text-neutral-100">
-            {debugInfo?.meta?.smallTalkHandled ? "✅" : "❌"}
-          </span>
-        </div>
-
-        {/* Chiarificazione */}
-        <div className="text-[11px] text-neutral-400">
-          Chiarificazione usata:{" "}
-          <span className="text-neutral-100">
-            {debugInfo?.meta?.clarificationUsed ? "✅" : "❌"}
-          </span>
-        </div>
-
-        {/* Auto-prompt */}
-        <div className="text-[11px] text-neutral-400">
-          Auto-prompt usato:{" "}
-          <span className="text-neutral-100">
-            {debugInfo?.meta?.autoPromptUsed ? "✅" : "❌"}
-          </span>
-        </div>
-
-        {/* Chiamate AI per richiesta */}
-        <div className="text-[11px] text-neutral-400">
-          Chiamate AI per questa richiesta:{" "}
-          <span className="text-neutral-100">
-            {debugInfo?.stats?.callsThisRequest ?? 0}
-          </span>
-        </div>
-
-        {/* Providers chiamati */}
-        <div className="mt-2 border-t border-neutral-800 pt-2">
-          <div className="text-[11px] text-neutral-400 mb-1">
-            Provider chiamati:
-          </div>
-
-          {Array.isArray(debugInfo?.stats?.providersRequested) &&
-          debugInfo.stats.providersRequested.length > 0 ? (
-            <ul className="space-y-1">
-              {debugInfo.stats.providersRequested.map((p: string, idx: number) => (
-                <li key={idx} className="flex justify-between">
-                  <span>{p}</span>
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <div className="text-[11px] text-neutral-500">
-              Nessun provider (solo smalltalk o chiarificazione).
-            </div>
-          )}
-        </div>
-
-        {/* Provider realmente usati nel fusion */}
-        <div className="mt-2 border-t border-neutral-800 pt-2">
-          <div className="text-[11px] text-neutral-400 mb-1">Provider usati:</div>
-
-          {Array.isArray(debugInfo?.fusion?.used) &&
-          debugInfo.fusion.used.length > 0 ? (
-            <ul className="space-y-1">
-              {debugInfo.fusion.used.map((u: any, idx: number) => (
-                <li key={idx} className="flex justify-between">
-                  <span>{u.provider}</span>
-                  <span className="text-neutral-400">
-                    score {(u.score ?? 0).toFixed(2)} • {u.latencyMs}ms
-                  </span>
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <div className="text-[11px] text-neutral-500">
-              Nessun provider esterno.
-            </div>
-          )}
-        </div>
-
-        {/* Costo stimato per questa richiesta */}
-        <div className="mt-3 border-t border-neutral-800 pt-2">
-          <div className="text-[11px] text-neutral-400 mb-1">
-            Costo stimato richiesta:
-          </div>
-          <div className="text-green-400 text-[13px] font-semibold">
-            {debugInfo?.costThisRequest
-              ? `${debugInfo.costThisRequest.toFixed(5)} USD`
-              : "0.00000 USD"}
-          </div>
-        </div>
-<div className="mt-2 border-t border-neutral-800 pt-2">
-  <div className="text-[11px] text-neutral-400 mb-1">
-    Costo stimato richiesta:
-  </div>
-
-  <div className="text-green-400 text-[13px] font-semibold">
-    {debugInfo?.costThisRequest
-      ? debugInfo.costThisRequest.toFixed(5) + " USD"
-      : "0.00000 USD"}
-  </div>
-</div>
-
-      </div>
-    </details>
-  </div>
+{/* 🔵 MODALE — Pannello Tecnico AI */}
+{showTechPanel && (
+  <AITechPanel
+    debugInfo={debugInfo}
+    onClose={() => setShowTechPanel(false)}
+  />
 )}
-{/* ⬆️ FINE PANNELLO TECNICO AI */}
 
+{/* 🔵 MODALE — Costi AI */}
+{showAICostPanel && (
+  <AICostPanel
+    aiUsage={aiUsage}
+    onClose={() => setShowAICostPanel(false)}
+  />
+)}
 
-             {/* PANNELLO COSTI FIRESTORE */}
-      <FirestoreCostPanel
-        totalReads={totalReads}
-        totalWrites={totalWrites}
-        onReset={resetCounters}
-      />
-
-      {/* PANNELLO COSTI AI (SIMULATI) */}
-      <AICostPanel aiUsage={aiUsage} />
+{/* 🔵 MODALE — Costi Firestore */}
+{showFirestorePanel && (
+  <FirestoreCostPanel
+    totalReads={totalReads}
+    totalWrites={totalWrites}
+    onClose={() => setShowFirestorePanel(false)}
+  />
+)}
 
     </main>   //* ⬅️ CHIUSURA MAIN MANCANTE */
   );
