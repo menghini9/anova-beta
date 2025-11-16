@@ -33,7 +33,14 @@ export interface ProviderResponse {
   latencyMs: number;
   success: boolean;
   error?: string;
+
+  // 🆕 Tracking costi / token (opzionali, non rompono gli altri provider)
+  tokensUsed?: number;
+  estimatedCost?: number;
+  promptTokens?: number;
+  completionTokens?: number;
 }
+
 
 export interface FusionResult {
   finalText: string;

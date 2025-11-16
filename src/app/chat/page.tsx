@@ -60,56 +60,11 @@ const safeRemove = (k: string) => {
 const PRICE_READS_PER_100K = 0.06;
 const PRICE_WRITES_PER_100K = 0.18;
 /* =========================================================
-   🤖 Prezzi simulati AI (per provider)
-   - Valori indicativi, SOLO per simulazione interna.
-   - La fatturazione reale dipende dai token e dal provider.
-   ========================================================= */
-
-type ProviderKey = "openai" | "anthropic" | "gemini" | "mistral" | "llama" | "web";
-
-interface ProviderUsage {
-  calls: number;
-  costUsd: number;
-}
-
-type AiUsage = Record<ProviderKey, ProviderUsage>;
-
-const AI_USAGE_LS_KEY = "anovaAiUsageV1";
-
-// 💰 Prezzi puramente dimostrativi (USD per 1000 token)
-const AI_PRICE_TABLE: Record<ProviderKey, { inPer1K: number; outPer1K: number }> = {
-  openai: { inPer1K: 0.003, outPer1K: 0.006 },
-  anthropic: { inPer1K: 0.003, outPer1K: 0.006 },
-  gemini: { inPer1K: 0.002, outPer1K: 0.004 },
-  mistral: { inPer1K: 0.002, outPer1K: 0.006 },
-  llama: { inPer1K: 0.001, outPer1K: 0.002 },
-  web: { inPer1K: 0.0005, outPer1K: 0.0005 }, // es. Tavily / SerpAPI
-};
-
-const EMPTY_AI_USAGE: AiUsage = {
-  openai: { calls: 0, costUsd: 0 },
-  anthropic: { calls: 0, costUsd: 0 },
-  gemini: { calls: 0, costUsd: 0 },
-  mistral: { calls: 0, costUsd: 0 },
-  llama: { calls: 0, costUsd: 0 },
-  web: { calls: 0, costUsd: 0 },
-};
-
-const PROVIDER_LABEL: Record<ProviderKey, string> = {
-  openai: "OpenAI GPT",
-  anthropic: "Anthropic Claude",
-  gemini: "Google Gemini",
-  mistral: "Mistral Large",
-  llama: "Meta Llama",
-  web: "Web Search",
-};
-// ⬆️ FINE BLOCCO COSTI AI // <---
-
-
-/* =========================================================
    💸 Pannello Costi (cumulativo persistente)
    ========================================================= */
-// ⬇️ BLOCCO 14.1 — Pannello costi Firestore
+// ⬇️ BLOCCO 14.1 — Pannelli costi Firestore + AI (ANOVA β)
+
+// 💰 Pannello costi Firestore (solo costo, niente contatori a schermo)
 function FirestoreCostPanel({
   totalReads,
   totalWrites,
@@ -125,48 +80,152 @@ function FirestoreCostPanel({
 
   return (
     <div className="fixed bottom-4 right-4 z-40">
-      <details className="bg-neutral-900/95 backdrop-blur border border-neutral-800 rounded-xl p-3 text-sm text-neutral-200 w-[320px]">
+      <details className="bg-neutral-900/95 backdrop-blur border border-neutral-800 rounded-xl p-3 text-xs text-neutral-200 w-[260px]">
         <summary className="cursor-pointer select-none">
-          💸 Costi Firestore (totali)
+          💸 Costi Firestore (stima)
         </summary>
         <div className="mt-2 space-y-2">
-          <div className="text-xs text-neutral-400">
-            Stima cumulativa locale (persistente). Non è il billing reale.
-          </div>
-          <div className="grid grid-cols-2 gap-2">
-            <div className="bg-neutral-950 border border-neutral-800 rounded-lg p-2">
-              <div className="text-[11px] text-neutral-500">Tot. letture</div>
-              <div className="text-base">
-                {totalReads.toLocaleString()}
-              </div>
-            </div>
-            <div className="bg-neutral-950 border border-neutral-800 rounded-lg p-2">
-              <div className="text-[11px] text-neutral-500">Tot. scritture</div>
-              <div className="text-base">
-                {totalWrites.toLocaleString()}
-              </div>
-            </div>
+          <div className="text-[11px] text-neutral-400">
+            Stima locale cumulativa. Non è il billing reale.
           </div>
           <div className="bg-neutral-950 border border-neutral-800 rounded-lg p-2">
-            <div className="text-[11px] text-neutral-500">Costo stimato</div>
-            <div className="text-base font-medium text-green-400">
+            <div className="text-[11px] text-neutral-500">Totale stimato</div>
+            <div className="text-sm font-semibold text-green-400">
               {costTotal.toLocaleString(undefined, {
                 style: "currency",
                 currency: "USD",
-                minimumFractionDigits: 4,
+                minimumFractionDigits: 5,
               })}
             </div>
-            <div className="text-[11px] text-neutral-500">
-              (Letture: {costReads.toFixed(4)} • Scritture:{" "}
-              {costWrites.toFixed(4)})
+            <div className="text-[10px] text-neutral-500 mt-1">
+              Letture: {costReads.toFixed(5)} • Scritture: {costWrites.toFixed(5)}
             </div>
           </div>
           <button
             onClick={onReset}
-            className="mt-3 text-xs text-red-400 hover:text-red-300"
+            className="mt-2 text-[11px] text-red-400 hover:text-red-300"
           >
-            🔄 Azzera contatore locale
+            🔄 Azzera contatore locale Firestore
           </button>
+        </div>
+      </details>
+    </div>
+  );
+}
+
+// 📊 Tipi per l'uso AI cumulativo
+type ProviderKey = "openai" | "anthropic" | "gemini" | "mistral" | "llama" | "web";
+
+type ProviderUsage = {
+  calls: number;
+  costUsd: number;
+  tokens: number;
+};
+
+export interface AiUsage {
+  totalCalls: number;
+  totalCostUsd: number;
+  totalTokens: number;
+  perProvider: Record<ProviderKey, ProviderUsage>;
+}
+
+// ⬇️ BLOCCO 14.1.A — Costanti AI mancanti (ripristinate)
+// 🔐 Chiave per salvare su localStorage
+const AI_USAGE_LS_KEY = "anova_ai_usage_v2";
+
+// 💰 Prezzi simulati (USD per 1000 token)
+const AI_PRICE_TABLE: Record<ProviderKey, { inPer1K: number; outPer1K: number }> = {
+  openai: { inPer1K: 0.003, outPer1K: 0.006 },
+  anthropic: { inPer1K: 0.003, outPer1K: 0.006 },
+  gemini: { inPer1K: 0.002, outPer1K: 0.004 },
+  mistral: { inPer1K: 0.002, outPer1K: 0.006 },
+  llama: { inPer1K: 0.001, outPer1K: 0.002 },
+  web: { inPer1K: 0.0005, outPer1K: 0.0005 },
+};
+// ⬆️ FINE BLOCCO 14.1.A
+
+
+// Stato vuoto iniziale
+export const EMPTY_AI_USAGE: AiUsage = {
+  totalCalls: 0,
+  totalCostUsd: 0,
+  totalTokens: 0,
+  perProvider: {
+    openai: { calls: 0, costUsd: 0, tokens: 0 },
+    anthropic: { calls: 0, costUsd: 0, tokens: 0 },
+    gemini: { calls: 0, costUsd: 0, tokens: 0 },
+    mistral: { calls: 0, costUsd: 0, tokens: 0 },
+    llama: { calls: 0, costUsd: 0, tokens: 0 },
+    web: { calls: 0, costUsd: 0, tokens: 0 },
+  },
+};
+
+// 💰 Pannello costi AI cumulativi
+function AICostPanel({ aiUsage }: { aiUsage: AiUsage }) {
+  const providers: ProviderKey[] = [
+    "openai",
+    "anthropic",
+    "gemini",
+    "mistral",
+    "llama",
+    "web",
+  ];
+
+  return (
+    <div className="fixed bottom-4 left-4 z-40">
+      <details className="bg-neutral-900/95 backdrop-blur border border-neutral-800 rounded-xl p-3 text-xs text-neutral-200 w-[280px]">
+        <summary className="cursor-pointer select-none">
+          🤖 Costi AI (stima cumulativa)
+        </summary>
+        <div className="mt-2 space-y-2">
+          <div className="text-[11px] text-neutral-400">
+            Stima locale basata su token. Non considera free tier/crediti.
+          </div>
+
+          {/* Totale complessivo */}
+          <div className="bg-neutral-950 border border-neutral-800 rounded-lg p-2">
+            <div className="text-[11px] text-neutral-500">
+              Totale stimato (tutte le AI)
+            </div>
+            <div className="text-sm font-semibold text-green-400">
+              {aiUsage.totalCostUsd.toLocaleString(undefined, {
+                style: "currency",
+                currency: "USD",
+                minimumFractionDigits: 5,
+              })}
+            </div>
+            <div className="text-[10px] text-neutral-500 mt-1">
+              Chiamate totali: {aiUsage.totalCalls.toLocaleString()} • Tokens:{" "}
+              {aiUsage.totalTokens.toLocaleString()}
+            </div>
+          </div>
+
+          {/* Dettaglio per provider */}
+          <div className="space-y-1 max-h-48 overflow-y-auto">
+            {providers.map((p) => {
+              const u = aiUsage.perProvider[p];
+              if (!u) return null;
+              return (
+                <div
+                  key={p}
+                  className="bg-neutral-950 border border-neutral-800 rounded-lg p-2"
+                >
+                  <div className="flex justify-between items-center">
+                    <span className="text-[11px] font-semibold uppercase">
+                      {p}
+                    </span>
+                    <span className="text-[11px] text-green-400">
+                      {u.costUsd.toFixed(5)} $
+                    </span>
+                  </div>
+                  <div className="text-[10px] text-neutral-500 mt-1">
+                    Chiamate: {u.calls.toLocaleString()} • Tokens:{" "}
+                    {u.tokens.toLocaleString()}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
         </div>
       </details>
     </div>
@@ -174,79 +233,6 @@ function FirestoreCostPanel({
 }
 // ⬆️ FINE BLOCCO 14.1
 
-// ⬇️ BLOCCO 14.2 — Pannello costi AI (simulati)
-function AICostPanel({ aiUsage }: { aiUsage: AiUsage }) {
-  const providers = Object.keys(aiUsage) as ProviderKey[];
-
-  const totalCalls = providers.reduce(
-    (acc, p) => acc + aiUsage[p].calls,
-    0
-  );
-  const totalCost = providers.reduce(
-    (acc, p) => acc + aiUsage[p].costUsd,
-    0
-  );
-
-  return (
-    <div className="fixed bottom-4 right-[360px] z-40">
-      <details className="bg-neutral-900/95 backdrop-blur border border-neutral-800 rounded-xl p-3 text-sm text-neutral-200 w-[340px]">
-        <summary className="cursor-pointer select-none">
-          🤖 Costi AI (simulati)
-        </summary>
-        <div className="mt-2 space-y-2">
-          <div className="text-[11px] text-neutral-400">
-            Simulazione indicativa: calcolo per chiamata in base alla
-            lunghezza dei messaggi. Non usare per contabilità reale.
-          </div>
-
-          <div className="space-y-1 max-h-64 overflow-y-auto pr-1">
-            {providers.map((p) => (
-              <div
-                key={p}
-                className="flex items-center justify-between bg-neutral-950 border border-neutral-800 rounded-lg px-2 py-1"
-              >
-                <div className="flex flex-col">
-                  <span className="text-[11px] text-neutral-400">
-                    {PROVIDER_LABEL[p]}
-                  </span>
-                  <span className="text-[11px] text-neutral-500">
-                    {aiUsage[p].calls.toLocaleString()} chiamate
-                  </span>
-                </div>
-                <div className="text-xs font-medium text-green-400">
-                  {aiUsage[p].costUsd.toLocaleString(undefined, {
-                    style: "currency",
-                    currency: "USD",
-                    minimumFractionDigits: 4,
-                  })}
-                </div>
-              </div>
-            ))}
-          </div>
-
-          <div className="bg-neutral-950 border border-neutral-800 rounded-lg p-2">
-            <div className="text-[11px] text-neutral-500">
-              Totale chiamate AI
-            </div>
-            <div className="text-base">
-              {totalCalls.toLocaleString()}
-            </div>
-            <div className="text-[11px] text-neutral-500 mt-1">
-              Spesa stimata complessiva
-            </div>
-            <div className="text-base font-medium text-green-400">
-              {totalCost.toLocaleString(undefined, {
-                style: "currency",
-                currency: "USD",
-                minimumFractionDigits: 4,
-              })}
-            </div>
-          </div>
-        </div>
-      </details>
-    </div>
-  );
-}
 // ⬆️ FINE BLOCCO 14.2
 
 
@@ -312,6 +298,28 @@ export default function ChatPage() {
     if (!hasWindow()) return;
     safeSet("anovaTotalWrites", String(totalWrites));
   }, [totalWrites]);
+
+// 🔁 Persistenza uso AI (mai azzerato automaticamente)
+useEffect(() => {
+  if (!hasWindow()) return;
+  const saved = safeGet("anovaAiUsageV1");
+  if (saved) {
+    try {
+      const parsed = JSON.parse(saved);
+      setAiUsage(parsed);
+    } catch {
+      // se rotto, ripartiamo da zero
+      setAiUsage(EMPTY_AI_USAGE);
+    }
+  }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+}, []);
+
+useEffect(() => {
+  if (!hasWindow()) return;
+  safeSet("anovaAiUsageV1", JSON.stringify(aiUsage));
+}, [aiUsage]);
+
 
   const resetCounters = () => {
     safeRemove("anovaTotalReads");
@@ -524,42 +532,40 @@ useEffect(() => {
   // ---------------------------------------
   // Aggiornamento costi AI (simulazione)
   // ---------------------------------------
-  const updateAiUsageFromRaw = (raw: any[], originalPrompt: string) => {
-    if (!Array.isArray(raw) || raw.length === 0) return;
+// ⬇️ BLOCCO 14.1.B — Update AiUsage compatibile con la nuova struttura
+function updateAiUsageFromRaw(raw: any[]) {
+  setAiUsage(prev => {
+    const next: AiUsage = structuredClone(prev);
 
-    // stima grezza: ~4 caratteri = 1 token
-    const inputTokens = Math.ceil(originalPrompt.length / 4);
+    raw.forEach(r => {
+      const provider = r.provider as ProviderKey;
+      if (!provider) return;
 
-    setAiUsage((prev) => {
-      const next: AiUsage = { ...prev };
+      const tokens = r.tokensUsed ?? 0;
+      const cost = r.estimatedCost ?? 0;
 
-      raw.forEach((r) => {
-        if (!r?.provider) return;
+      // Aggiorna per provider
+      const p = next.perProvider[provider];
+      p.calls += 1;
+      p.tokens += tokens;
+      p.costUsd += cost;
 
-        const key = String(r.provider).toLowerCase() as ProviderKey;
-        if (!AI_PRICE_TABLE[key]) return;
-
-        const outText = String(r.text ?? "");
-        const outputTokens = Math.ceil(outText.length / 4);
-
-        const prices = AI_PRICE_TABLE[key];
-        const cost =
-          (inputTokens / 1000) * prices.inPer1K +
-          (outputTokens / 1000) * prices.outPer1K;
-
-        const current = next[key] ?? { calls: 0, costUsd: 0 };
-        next[key] = {
-          calls: current.calls + 1,
-          costUsd: current.costUsd + cost,
-        };
-      });
-
-      if (hasWindow()) {
-        safeSet(AI_USAGE_LS_KEY, JSON.stringify(next));
-      }
-      return next;
+      // Aggiorna totali generali
+      next.totalCalls += 1;
+      next.totalTokens += tokens;
+      next.totalCostUsd += cost;
     });
-  };
+
+    // Persistenza locale
+    if (hasWindow()) {
+      safeSet(AI_USAGE_LS_KEY, JSON.stringify(next));
+    }
+
+    return next;
+  });
+}
+// ⬆️ FINE BLOCCO 14.1.B
+
 
   // ---------------------------------------
   // Nuova Sessione
@@ -706,80 +712,125 @@ useEffect(() => {
   throw new Error("AI unreachable");
 }
 
-  const handleSend = async (e: React.FormEvent) => {
-    e.preventDefault();
-    const trimmed = input.trim();
-    if (!trimmed || !sessionId) return;
+const handleSend = async (e: React.FormEvent) => {
+  e.preventDefault();
+  const trimmed = input.trim();
+  if (!trimmed || !sessionId) return;
 
-    const messagesRef = collection(db, "sessions", sessionId, "messages");
+  const messagesRef = collection(db, "sessions", sessionId, "messages");
 
-    // 1️⃣ Salvo il messaggio dell'utente
-    await addDoc(messagesRef, {
-      sender: "user",
-      text: trimmed,
-      createdAt: serverTimestamp(),
+  // 1️⃣ Salvo il messaggio dell'utente
+  await addDoc(messagesRef, {
+    sender: "user",
+    text: trimmed,
+    createdAt: serverTimestamp(),
+  });
+  incWrite(2);
+
+  await updateDoc(doc(db, "sessions", sessionId), {
+    updatedAt: serverTimestamp(),
+    lastMessage: trimmed,
+  });
+  incWrite();
+
+  setInput("");
+
+  // 2️⃣ Chiamata all'orchestratore cognitivo
+  let aiResponse = "Elaborazione in corso...";
+  let costThisRequest = 0;
+  let rawProviders: any[] = [];
+
+  try {
+    const res = await fetch("/api/orchestrate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ prompt: trimmed, userId: sessionId }),
     });
-    incWrite(2);
 
-    await updateDoc(doc(db, "sessions", sessionId), {
-      updatedAt: serverTimestamp(),
-      lastMessage: trimmed,
-    });
-    incWrite();
+    const data = await res.json();
 
-    setInput("");
+    // 🔍 debug tecnico per il pannello AI
+    setDebugInfo({
+  ...data,
+  costThisRequest: data.costThisRequest ?? 0,
+});
 
-    // 2️⃣ Chiamata all'orchestratore cognitivo
-    let aiResponse = "Elaborazione in corso...";
 
-    try {
-      const res = await fetch("/api/orchestrate", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ prompt: trimmed, userId: sessionId }),
+    aiResponse =
+      data?.fusion?.finalText ||
+      "⚠️ Nessuna risposta utile dall'orchestratore.";
+
+    costThisRequest = data?.costThisRequest ?? 0;
+    rawProviders = Array.isArray(data?.raw) ? data.raw : [];
+
+    console.log("🧠 ANOVA β — Risposta fusa:", data.fusion);
+    console.log("🧠 ANOVA β — Meta:", data.meta);
+    console.log("🧠 ANOVA β — Costo richiesta:", costThisRequest);
+  } catch (err) {
+    console.error("Errore chiamata orchestratore:", err);
+    aiResponse = "❌ Errore nel motore cognitivo. Riprova.";
+  }
+
+  // 3️⃣ Aggiorno uso AI cumulativo (solo se ci sono provider)
+  if (rawProviders.length > 0 || costThisRequest > 0) {
+    setAiUsage((prev) => {
+      const next: AiUsage = {
+        ...prev,
+        totalCalls: prev.totalCalls,
+        totalCostUsd: prev.totalCostUsd + costThisRequest,
+        totalTokens: prev.totalTokens,
+        perProvider: { ...prev.perProvider },
+      };
+
+      // Somma per provider
+      (rawProviders as any[]).forEach((r) => {
+        const pid = r.provider as ProviderKey;
+        if (!pid || !next.perProvider[pid]) return;
+
+        const cost = r.estimatedCost ?? 0;
+        const tokens = r.tokensUsed ?? 0;
+
+        next.totalCalls += 1;
+        next.totalTokens += tokens;
+
+        const prevProv = next.perProvider[pid];
+        next.perProvider[pid] = {
+          calls: prevProv.calls + 1,
+          costUsd: prevProv.costUsd + cost,
+          tokens: prevProv.tokens + tokens,
+        };
       });
 
-      const data = await res.json();
-
-      // salvo info di debug per il pannello tecnico
-      setDebugInfo(data);
-
-      aiResponse =
-        data?.fusion?.finalText ||
-        "⚠️ Nessuna risposta utile dall'orchestratore.";
-
-      console.log("🧠 ANOVA β — Risposta fusa:", data.fusion);
-      console.log("🧠 ANOVA β — Meta:", data.meta);
-    } catch (err) {
-      console.error("Errore chiamata orchestratore:", err);
-      aiResponse = "❌ Errore nel motore cognitivo. Riprova.";
-    }
-
-    // 3️⃣ Salvo la risposta di ANOVA nel thread
-    await addDoc(messagesRef, {
-      sender: "anova",
-      text: aiResponse,
-      createdAt: serverTimestamp(),
+      return next;
     });
-    incWrite(2);
+  }
 
-    await updateDoc(doc(db, "sessions", sessionId), {
-      updatedAt: serverTimestamp(),
-      lastMessage: aiResponse,
-    });
-    incWrite();
+  // 4️⃣ Salvo la risposta di ANOVA nel thread
+  await addDoc(messagesRef, {
+    sender: "anova",
+    text: aiResponse,
+    createdAt: serverTimestamp(),
+  });
+  incWrite(2);
 
-    // aggiorna cache locale
-    cacheRef.current[sessionId] = {
-      messages: [
-        ...(cacheRef.current[sessionId]?.messages || []),
-        { sender: "user", text: trimmed },
-        { sender: "anova", text: aiResponse },
-      ],
-      title: cacheRef.current[sessionId]?.title || sessionTitle || "",
-      ts: Date.now(),
-    };
+  await updateDoc(doc(db, "sessions", sessionId), {
+    updatedAt: serverTimestamp(),
+    lastMessage: aiResponse,
+  });
+  incWrite();
+
+  // aggiorna cache locale
+  cacheRef.current[sessionId] = {
+    messages: [
+      ...(cacheRef.current[sessionId]?.messages || []),
+      { sender: "user", text: trimmed },
+      { sender: "anova", text: aiResponse },
+    ],
+    title: cacheRef.current[sessionId]?.title || sessionTitle || "",
+    ts: Date.now(),
   };
+};
+
 
 
   // ---------------------------------------
@@ -1037,77 +1088,138 @@ useEffect(() => {
         </div>
       )}
       {/* PANNELLO TECNICO AI */}
-      {debugInfo && (
-        <div className="fixed top-20 left-4 z-[9999] w-[320px]">
-          <details className="bg-neutral-900/95 backdrop-blur border border-neutral-800 rounded-xl p-3 text-xs text-neutral-200 w-[340px]">
-            <summary className="cursor-pointer select-none">
-              🧠 Dettagli AI (ANOVA β)
-            </summary>
-            <div className="mt-2 space-y-2">
-              <div className="text-[11px] text-neutral-400">
-                Modalità:{" "}
-                <span className="text-neutral-100">
-                  {debugInfo?.meta?.intent?.mode ?? "—"}
-                </span>
-              </div>
-              <div className="text-[11px] text-neutral-400">
-                Domain:{" "}
-                <span className="text-neutral-100">
-                  {debugInfo?.meta?.intent?.purpose ?? "—"}
-                </span>
-              </div>
-              <div className="text-[11px] text-neutral-400">
-                Small talk locale:{" "}
-                <span className="text-neutral-100">
-                  {debugInfo?.meta?.smallTalkHandled ? "✅" : "❌"}
-                </span>
-              </div>
-              <div className="text-[11px] text-neutral-400">
-                Chiarificazione usata:{" "}
-                <span className="text-neutral-100">
-                  {debugInfo?.meta?.clarificationUsed ? "✅" : "❌"}
-                </span>
-              </div>
-              <div className="text-[11px] text-neutral-400">
-                Auto-prompt usato:{" "}
-                <span className="text-neutral-100">
-                  {debugInfo?.meta?.autoPromptUsed ? "✅" : "❌"}
-                </span>
-              </div>
-              
-              <div className="text-[11px] text-neutral-400">
-                Chiamate AI per questa richiesta:{" "}
-                <span className="text-neutral-100">
-                  {debugInfo?.stats?.callsThisRequest ?? 0}
-                </span>
-              </div>
+{/* ⬇️ PANNELLO TECNICO AI (esteso v1) */}
+{debugInfo && (
+  <div className="fixed top-20 left-4 z-[9999] w-[330px]">
+    <details className="bg-neutral-900/95 backdrop-blur border border-neutral-800 rounded-xl p-3 text-xs text-neutral-200 w-[340px]">
+      <summary className="cursor-pointer select-none">
+        🧠 Dettagli AI (ANOVA β)
+      </summary>
 
-              <div className="mt-2 border-t border-neutral-800 pt-2">
-                <div className="text-[11px] text-neutral-400 mb-1">
-                  Provider usati:
-                </div>
-                {Array.isArray(debugInfo?.fusion?.used) &&
-                debugInfo.fusion.used.length > 0 ? (
-                  <ul className="space-y-1">
-                    {debugInfo.fusion.used.map((u: any, idx: number) => (
-                      <li key={idx} className="flex justify-between">
-                        <span>{u.provider}</span>
-                        <span className="text-neutral-400">
-                          score {(u.score ?? 0).toFixed(2)} • {u.latencyMs}ms
-                        </span>
-                      </li>
-                    ))}
-                  </ul>
-                ) : (
-                  <div className="text-[11px] text-neutral-500">
-                    Nessun provider esterno (small talk o chiarificazione).
-                  </div>
-                )}
-              </div>
-            </div>
-          </details>
+      <div className="mt-2 space-y-2">
+
+        {/* Modalità */}
+        <div className="text-[11px] text-neutral-400">
+          Modalità:{" "}
+          <span className="text-neutral-100">
+            {debugInfo?.meta?.intent?.mode ?? "—"}
+          </span>
         </div>
-      )}
+
+        {/* Domain */}
+        <div className="text-[11px] text-neutral-400">
+          Domain:{" "}
+          <span className="text-neutral-100">
+            {debugInfo?.meta?.intent?.purpose ?? "—"}
+          </span>
+        </div>
+
+        {/* Smalltalk */}
+        <div className="text-[11px] text-neutral-400">
+          Small talk locale:{" "}
+          <span className="text-neutral-100">
+            {debugInfo?.meta?.smallTalkHandled ? "✅" : "❌"}
+          </span>
+        </div>
+
+        {/* Chiarificazione */}
+        <div className="text-[11px] text-neutral-400">
+          Chiarificazione usata:{" "}
+          <span className="text-neutral-100">
+            {debugInfo?.meta?.clarificationUsed ? "✅" : "❌"}
+          </span>
+        </div>
+
+        {/* Auto-prompt */}
+        <div className="text-[11px] text-neutral-400">
+          Auto-prompt usato:{" "}
+          <span className="text-neutral-100">
+            {debugInfo?.meta?.autoPromptUsed ? "✅" : "❌"}
+          </span>
+        </div>
+
+        {/* Chiamate AI per richiesta */}
+        <div className="text-[11px] text-neutral-400">
+          Chiamate AI per questa richiesta:{" "}
+          <span className="text-neutral-100">
+            {debugInfo?.stats?.callsThisRequest ?? 0}
+          </span>
+        </div>
+
+        {/* Providers chiamati */}
+        <div className="mt-2 border-t border-neutral-800 pt-2">
+          <div className="text-[11px] text-neutral-400 mb-1">
+            Provider chiamati:
+          </div>
+
+          {Array.isArray(debugInfo?.stats?.providersRequested) &&
+          debugInfo.stats.providersRequested.length > 0 ? (
+            <ul className="space-y-1">
+              {debugInfo.stats.providersRequested.map((p: string, idx: number) => (
+                <li key={idx} className="flex justify-between">
+                  <span>{p}</span>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <div className="text-[11px] text-neutral-500">
+              Nessun provider (solo smalltalk o chiarificazione).
+            </div>
+          )}
+        </div>
+
+        {/* Provider realmente usati nel fusion */}
+        <div className="mt-2 border-t border-neutral-800 pt-2">
+          <div className="text-[11px] text-neutral-400 mb-1">Provider usati:</div>
+
+          {Array.isArray(debugInfo?.fusion?.used) &&
+          debugInfo.fusion.used.length > 0 ? (
+            <ul className="space-y-1">
+              {debugInfo.fusion.used.map((u: any, idx: number) => (
+                <li key={idx} className="flex justify-between">
+                  <span>{u.provider}</span>
+                  <span className="text-neutral-400">
+                    score {(u.score ?? 0).toFixed(2)} • {u.latencyMs}ms
+                  </span>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <div className="text-[11px] text-neutral-500">
+              Nessun provider esterno.
+            </div>
+          )}
+        </div>
+
+        {/* Costo stimato per questa richiesta */}
+        <div className="mt-3 border-t border-neutral-800 pt-2">
+          <div className="text-[11px] text-neutral-400 mb-1">
+            Costo stimato richiesta:
+          </div>
+          <div className="text-green-400 text-[13px] font-semibold">
+            {debugInfo?.costThisRequest
+              ? `${debugInfo.costThisRequest.toFixed(5)} USD`
+              : "0.00000 USD"}
+          </div>
+        </div>
+<div className="mt-2 border-t border-neutral-800 pt-2">
+  <div className="text-[11px] text-neutral-400 mb-1">
+    Costo stimato richiesta:
+  </div>
+
+  <div className="text-green-400 text-[13px] font-semibold">
+    {debugInfo?.costThisRequest
+      ? debugInfo.costThisRequest.toFixed(5) + " USD"
+      : "0.00000 USD"}
+  </div>
+</div>
+
+      </div>
+    </details>
+  </div>
+)}
+{/* ⬆️ FINE PANNELLO TECNICO AI */}
+
 
              {/* PANNELLO COSTI FIRESTORE */}
       <FirestoreCostPanel

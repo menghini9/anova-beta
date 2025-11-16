@@ -156,13 +156,17 @@ export async function getAIResponse(
   fusion: FusionResult;
   raw: ProviderResponse[];
   meta: OrchestrationMeta;
+  costThisRequest: number;   // 🆕 aggiunto
 }> {
+
+
 
   const intent = analyzeIntent(prompt, userId);
 
-  // 1️⃣ Small talk: risposta locale, nessuna chiamata esterna
+  // 1️⃣ Small talk (nessuna AI esterna)
   if (intent.isSmallTalk) {
     const text = smallTalkResponse(prompt);
+
     const fusion: FusionResult = {
       finalText: text,
       fusionScore: 1,
@@ -174,14 +178,25 @@ export async function getAIResponse(
       smallTalkHandled: true,
       clarificationUsed: false,
       autoPromptUsed: false,
+      stats: {
+        callsThisRequest: 0,
+        providersRequested: [],
+      },
     };
 
-    return { fusion, raw: [], meta };
+    return {
+  fusion,
+  raw: [],
+  meta,
+  costThisRequest: 0,  // <--- AGGIUNTO
+};
+
   }
 
-  // 2️⃣ Richiesta ambigua: prima chiedo chiarimenti, poi eventualmente userò le AI
-   if (intent.needsClarification) {
+  // 2️⃣ Richiesta ambigua → fai una domanda di chiarimento
+  if (intent.needsClarification) {
     const text = buildClarificationQuestion(intent);
+
     const fusion: FusionResult = {
       finalText: text,
       fusionScore: 1,
@@ -193,22 +208,32 @@ export async function getAIResponse(
       smallTalkHandled: false,
       clarificationUsed: true,
       autoPromptUsed: false,
+      stats: {
+        callsThisRequest: 0,
+        providersRequested: [],
+      },
     };
 
-    return { fusion, raw: [], meta };
+    return {
+  fusion,
+  raw: [],
+  meta,
+  costThisRequest: 0,  // <--- AGGIUNTO
+};
+
   }
 
-
-  // 3️⃣ Costruisco eventuale auto-prompt per le AI
+  // 3️⃣ Preparazione dell’auto-prompt (prompt arricchito)
   const intentForProviders: Intent = {
     ...intent,
     original: buildAutoPrompt(intent),
   };
 
+  // 4️⃣ Chiamate parallele alle AI
   const { results: raw, stats } = await fanout(intentForProviders);
+  // stats = { callsThisRequest, providersRequested }
 
-
-  // log minimo performance (solo success)
+  // 5️⃣ Log di performance
   await Promise.all(
     raw
       .filter((r) => r.success)
@@ -223,18 +248,34 @@ export async function getAIResponse(
       )
   );
 
+  // 6️⃣ Fusione risposte
   const fusion = fuse(raw);
 
-  const meta: OrchestrationMeta = {
-  intent,
-  smallTalkHandled: false,
-  clarificationUsed: false,
-  autoPromptUsed: !!intent.autoPromptNeeded,
-  stats, // 🆕 aggiunto
+  // 7️⃣ Meta per pannello tecnico
+   const meta: OrchestrationMeta = {
+    intent,
+    smallTalkHandled: false,
+    clarificationUsed: false,
+    autoPromptUsed: !!intent.autoPromptNeeded,
+    stats, // 🆕 info su chiamate e provider
+  };
+
+  // ⬇️ BLOCCO 13.1.C — Aggiunta costo singola richiesta
+const costThisRequest = raw.reduce(
+  (acc, r) => acc + (r.estimatedCost ?? 0),
+  0
+);
+
+return {
+  fusion,
+  raw,
+  meta,
+  costThisRequest,   // 🆕 aggiunto
 };
+// ⬆️ FINE BLOCCO 13.1.C
 
 
-  return { fusion, raw, meta };
 }
+
 
 // ⬆️ FINE BLOCCO 13.1
