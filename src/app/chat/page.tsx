@@ -614,11 +614,22 @@ const handleSend = async (e: React.FormEvent) => {
 
     const data = await res.json();
 
-    // 🔍 debug tecnico per il pannello AI
-    setDebugInfo({
-  ...data,
-  costThisRequest: data.costThisRequest ?? 0,
+ // 🔍 debug tecnico per il pannello AI (versione strutturata)
+setDebugInfo({
+  model: data?.meta?.model || data?.raw?.[0]?.model || "N/D",
+  provider: data?.meta?.provider || data?.raw?.[0]?.provider || "N/D",
+
+  inputTokens: data?.meta?.tokens?.input ?? 0,
+  outputTokens: data?.meta?.tokens?.output ?? 0,
+
+  fusionScore: data?.fusion?.fusionScore ?? null,
+  latencyMs: data?.meta?.latencyMs ?? null,
+
+  // extra info utile (non mostrata ma disponibile)
+  raw: data.raw || [],
+  meta: data.meta || {},
 });
+
 
 
     aiResponse =

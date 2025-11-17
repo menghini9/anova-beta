@@ -1,44 +1,41 @@
-// AICostPanel.tsx
+// ⬇️ BLOCCO — AI Cost Panel 2.0
 "use client";
-
-import type { AiUsage } from "@/types/ai";
 
 export default function AICostPanel({
   aiUsage,
   onClose,
 }: {
-  aiUsage: AiUsage;
+  aiUsage: any;
   onClose: () => void;
 }) {
+  const providers = Object.entries(aiUsage.perProvider);
+
+  const totalCost = aiUsage.totalCostUsd.toFixed(6);
+
   return (
-    <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-[999] flex items-center justify-center">
-      <div className="bg-neutral-900 border border-neutral-700 rounded-xl p-5 w-[420px] max-h-[80vh] overflow-y-auto">
-        <div className="flex justify-between items-center mb-4">
-          <h2 className="text-lg font-semibold">🤖 Costi AI</h2>
-          <button onClick={onClose} className="text-neutral-400 hover:text-white">
-            ✖
-          </button>
+    <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50">
+      <div className="bg-neutral-950 p-6 rounded-xl w-full max-w-3xl text-neutral-200 max-h-[90vh] overflow-y-auto">
+
+        <div className="flex justify-between items-center mb-6">
+          <h2 className="text-xl font-semibold">🤖 Costi AI</h2>
+          <button onClick={onClose} className="text-2xl px-2">✕</button>
         </div>
 
-        <div className="text-sm space-y-3">
-          <div className="border border-neutral-700 rounded-lg p-3">
-            Totale:{" "}
-            <span className="text-green-400 font-semibold">
-              {aiUsage.totalCostUsd.toFixed(5)} USD
-            </span>
+        <div className="mb-6 bg-neutral-900 p-4 rounded-lg border border-neutral-800">
+          <p className="text-neutral-400 text-sm">Totale:</p>
+          <p className="text-green-400 text-xl">{totalCost} USD</p>
+        </div>
+
+        {providers.map(([key, data]: any) => (
+          <div key={key} className="bg-neutral-900 p-4 mb-4 rounded-lg border border-neutral-800">
+            <p className="font-semibold uppercase">{key}</p>
+            <p>Chiamate: {data.calls}</p>
+            <p>Token: {data.tokens}</p>
+            <p className="text-green-400">{data.costUsd.toFixed(6)} USD</p>
           </div>
-
-          {Object.entries(aiUsage.perProvider).map(([provider, v]) => (
-            <div key={provider} className="border border-neutral-700 rounded-lg p-3">
-              <div className="text-neutral-400 uppercase text-xs">{provider}</div>
-              <div className="text-green-400">{v.costUsd.toFixed(5)} USD</div>
-              <div className="text-neutral-500 text-xs">
-                Chiamate: {v.calls} · Tokens: {v.tokens}
-              </div>
-            </div>
-          ))}
-        </div>
+        ))}
       </div>
     </div>
   );
 }
+// ⬆️ FINE BLOCCO
