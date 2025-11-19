@@ -1,17 +1,32 @@
-// ⬇️ BLOCCO 4 — /src/lib/orchestrator/providers/openai.ts
-// ANOVA_ORCHESTRATOR_V43_COST_TRACKING
+// ⬇️ BLOCCO 2 — OpenAI Provider (Base-Driven)
+// ANOVA_ORCHESTRATOR_V50_OPENAI_PROVIDER
 
-import { withTimeout } from "./_base";
+import { invokeBase } from "./_baseProvider";
 import type { ProviderResponse } from "../types";
+import type { ProviderKey } from "../../../types/ai";
 import { PROVIDER_TIMEOUT_MS } from "../policy";
 
 export async function invokeOpenAI(prompt: string): Promise<ProviderResponse> {
-  const t0 = Date.now();
-  try {
-    const key = process.env.OPENAI_API_KEY;
-    if (!key) throw new Error("OPENAI_API_KEY missing");
+  const key = process.env.OPENAI_API_KEY;
+  if (!key) {
+    return {
+      provider: "openai",
+      text: "",
+      success: false,
+      error: "OPENAI_API_KEY missing",
+      latencyMs: 0,
+      tokensUsed: 0,
+      promptTokens: 0,
+      completionTokens: 0,
+      estimatedCost: 0,
+    };
+  }
 
-    const r = await withTimeout(
+  return invokeBase({
+    provider: "openai",
+
+    // 1️⃣ ESECUZIONE DELLA CHIAMATA API
+    exec: () =>
       fetch("https://api.openai.com/v1/chat/completions", {
         method: "POST",
         headers: {
@@ -24,55 +39,33 @@ export async function invokeOpenAI(prompt: string): Promise<ProviderResponse> {
           temperature: 0.4,
         }),
       }).then((res) => res.json()),
-      PROVIDER_TIMEOUT_MS
-    );
 
-    const text =
-      r?.choices?.[0]?.message?.content ??
-      r?.choices?.[0]?.text ??
-      "";
+    // 2️⃣ PARSER DELLA RISPOSTA
+    parse: (raw: any) => {
+      const text =
+        raw?.choices?.[0]?.message?.content ??
+        raw?.choices?.[0]?.text ??
+        "";
 
-    // -------------------------------
-    // 📌 TOKEN + COSTO STIMATO
-    // -------------------------------
-    const usage = r?.usage || {};
-    const promptTokens = usage.prompt_tokens ?? 0;
-    const completionTokens = usage.completion_tokens ?? 0;
-    const totalTokens = promptTokens + completionTokens;
+      const usage = raw?.usage || {};
+      return {
+        text,
+        promptTokens: usage.prompt_tokens ?? 0,
+        completionTokens: usage.completion_tokens ?? 0,
+      };
+    },
 
-    // Prezzi indicativi GPT-4o-mini (base OpenAI, simulazione)
-    // Prompt: 0.00000015$ / token — Completion: 0.00000060$ / token
-    const cost =
-      promptTokens * 0.00000015 +
-      completionTokens * 0.00000060;
+    // 3️⃣ TIMEOUT
+    timeoutMs: PROVIDER_TIMEOUT_MS,
 
-    return {
-      provider: "openai",
-      text,
-      latencyMs: Date.now() - t0,
-      success: Boolean(text),
-      error: text ? undefined : "empty_response",
-
-      // 🆕 CAMPI AGGIUNTI
-      tokensUsed: totalTokens,
-      estimatedCost: cost,
-      promptTokens,
-      completionTokens,
-    };
-  } catch (e: any) {
-    return {
-      provider: "openai",
-      text: "",
-      latencyMs: Date.now() - t0,
-      success: false,
-      error: e?.message ?? "unknown",
-
-      // In caso di errore forniamo dati vuoti
-      tokensUsed: 0,
-      estimatedCost: 0,
-      promptTokens: 0,
-      completionTokens: 0,
-    };
-  }
+    // 4️⃣ CALCOLO COSTI
+    cost: ({ promptTokens, completionTokens }) => {
+      // Valori indicativi GPT-4o-mini
+      const costPrompt = promptTokens * 0.00000015;
+      const costCompletion = completionTokens * 0.00000060;
+      return costPrompt + costCompletion;
+    },
+  });
 }
-// ⬆️ FINE BLOCCO 4
+
+// ⬆️ FINE BLOCCO 2

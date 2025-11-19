@@ -1,48 +1,46 @@
-// ⬇️ BLOCCO 7 — /src/lib/orchestrator/providers/mistral.ts
-// ANOVA_ORCHESTRATOR_V42
+// ⬇️ BLOCCO 3.3 — Mistral Provider (Skeleton)
+// ANOVA_ORCHESTRATOR_V50_PROVIDER_MISTRAL
 
-import { withTimeout } from "./_base";
+import { invokeBase } from "./_baseProvider";
 import type { ProviderResponse } from "../types";
 import { PROVIDER_TIMEOUT_MS } from "../policy";
 
 export async function invokeMistral(prompt: string): Promise<ProviderResponse> {
-  const t0 = Date.now();
-  try {
-    const key = process.env.MISTRAL_API_KEY;
-    if (!key) throw new Error("MISTRAL_API_KEY missing");
-
-    const r = await withTimeout(
-      fetch("https://api.mistral.ai/v1/chat/completions", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${key}`,
-        },
-        body: JSON.stringify({
-          model: "mistral-large-latest",
-          messages: [{ role: "user", content: prompt }],
-          temperature: 0.3,
-        }),
-      }).then((res) => res.json()),
-      PROVIDER_TIMEOUT_MS
-    );
-
-    const text = r?.choices?.[0]?.message?.content ?? "";
-    return {
-      provider: "mistral",
-      text,
-      latencyMs: Date.now() - t0,
-      success: Boolean(text),
-      error: text ? undefined : "empty_response",
-    };
-  } catch (e: any) {
+  const key = process.env.MISTRAL_API_KEY;
+  if (!key) {
     return {
       provider: "mistral",
       text: "",
-      latencyMs: Date.now() - t0,
       success: false,
-      error: e?.message ?? "unknown",
+      error: "MISTRAL_API_KEY missing",
+      latencyMs: 0,
+      tokensUsed: 0,
+      promptTokens: 0,
+      completionTokens: 0,
+      estimatedCost: 0,
     };
   }
+
+  return invokeBase({
+    provider: "mistral",
+
+    exec: async () => {
+      return {
+        choices: [{ message: "[Mistral non ancora collegata]" }],
+        usage: { prompt_tokens: 0, completion_tokens: 0 },
+      };
+    },
+
+    parse: (raw: any) => ({
+      text: raw?.choices?.[0]?.message ?? "",
+      promptTokens: raw?.usage?.prompt_tokens ?? 0,
+      completionTokens: raw?.usage?.completion_tokens ?? 0,
+    }),
+
+    timeoutMs: PROVIDER_TIMEOUT_MS,
+
+    cost: () => 0,
+  });
 }
-// ⬆️ FINE BLOCCO 7
+
+// ⬆️ FINE BLOCCO 3.3

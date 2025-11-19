@@ -1,45 +1,46 @@
-// ⬇️ BLOCCO 9 — /src/lib/orchestrator/providers/web.ts
-// ANOVA_ORCHESTRATOR_V42
+// ⬇️ BLOCCO 3.5 — Web Search Provider (Skeleton)
+// ANOVA_ORCHESTRATOR_V50_PROVIDER_WEB
 
-import { withTimeout } from "./_base";
+import { invokeBase } from "./_baseProvider";
 import type { ProviderResponse } from "../types";
 import { PROVIDER_TIMEOUT_MS } from "../policy";
 
 export async function invokeWeb(prompt: string): Promise<ProviderResponse> {
-  const t0 = Date.now();
-  try {
-    const key = process.env.TAVILY_API_KEY;
-    if (!key) throw new Error("TAVILY_API_KEY missing");
-
-    const r = await withTimeout(
-      fetch("https://api.tavily.com/search", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
-        body: JSON.stringify({
-          query: prompt,
-          max_results: 5,
-          include_answer: true,
-        }),
-      }).then((res) => res.json()),
-      PROVIDER_TIMEOUT_MS
-    );
-
-    const text = r?.answer || (r?.results || []).map((x: any) => `• ${x.title}: ${x.url}`).join("\n");
-    return {
-      provider: "web",
-      text: text || "",
-      latencyMs: Date.now() - t0,
-      success: Boolean(text),
-      error: text ? undefined : "empty_response",
-    };
-  } catch (e: any) {
+  const key = process.env.WEB_SEARCH_API_KEY;
+  if (!key) {
     return {
       provider: "web",
       text: "",
-      latencyMs: Date.now() - t0,
       success: false,
-      error: e?.message ?? "unknown",
+      error: "WEB_SEARCH_API_KEY missing",
+      latencyMs: 0,
+      tokensUsed: 0,
+      promptTokens: 0,
+      completionTokens: 0,
+      estimatedCost: 0,
     };
   }
+
+  return invokeBase({
+    provider: "web",
+
+    exec: async () => {
+      return {
+        answer: "[Web Search non ancora collegata]",
+        usage: { prompt_tokens: 0, completion_tokens: 0 },
+      };
+    },
+
+    parse: (raw: any) => ({
+      text: raw?.answer ?? "",
+      promptTokens: raw?.usage?.prompt_tokens ?? 0,
+      completionTokens: raw?.usage?.completion_tokens ?? 0,
+    }),
+
+    timeoutMs: PROVIDER_TIMEOUT_MS,
+
+    cost: () => 0,
+  });
 }
-// ⬆️ FINE BLOCCO 9
+
+// ⬆️ FINE BLOCCO 3.5

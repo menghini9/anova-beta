@@ -25,6 +25,7 @@ import { EMPTY_AI_USAGE } from "@/types/ai";
 import AICostPanel from "@/components/panels/AICostPanel";
 import FirestoreCostPanel from "@/components/panels/FirestoreCostPanel";
 import AITechPanel from "@/components/panels/AITechPanel";
+import OrchestratorPanel from "@/components/OrchestratorPanel";
 
 /* =========================================================
    🧩 Tipi
@@ -957,6 +958,7 @@ setDebugInfo({
         }}
         className="block w-full text-left px-3 py-2 text-sm hover:bg-neutral-800 rounded-lg"
       >
+
         🔥 Costi Firestore
       </button>
     </div>
@@ -1041,6 +1043,8 @@ setDebugInfo({
     onClose={() => setShowFirestorePanel(false)}
   />
 )}
+
+ <OrchestratorPanel data={debugInfo} />
 
     </main>   //* ⬅️ CHIUSURA MAIN MANCANTE */
   );

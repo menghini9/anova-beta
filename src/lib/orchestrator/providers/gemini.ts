@@ -1,44 +1,46 @@
-// ⬇️ BLOCCO 6 — /src/lib/orchestrator/providers/gemini.ts
-// ANOVA_ORCHESTRATOR_V42
+// ⬇️ BLOCCO 3.2 — Gemini Provider (Skeleton)
+// ANOVA_ORCHESTRATOR_V50_PROVIDER_GEMINI
 
-import { withTimeout } from "./_base";
+import { invokeBase } from "./_baseProvider";
 import type { ProviderResponse } from "../types";
 import { PROVIDER_TIMEOUT_MS } from "../policy";
 
 export async function invokeGemini(prompt: string): Promise<ProviderResponse> {
-  const t0 = Date.now();
-  try {
-    const key = process.env.GEMINI_API_KEY;
-    if (!key) throw new Error("GEMINI_API_KEY missing");
-
-    const r = await withTimeout(
-      fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:generateContent?key=${key}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          contents: [{ parts: [{ text: prompt }] }],
-        }),
-      }).then((res) => res.json()),
-      PROVIDER_TIMEOUT_MS
-    );
-
-    const text = r?.candidates?.[0]?.content?.parts?.map((p: any) => p.text).join("\n") ?? "";
-
-    return {
-      provider: "gemini",
-      text,
-      latencyMs: Date.now() - t0,
-      success: Boolean(text),
-      error: text ? undefined : "empty_response",
-    };
-  } catch (e: any) {
+  const key = process.env.GEMINI_API_KEY;
+  if (!key) {
     return {
       provider: "gemini",
       text: "",
-      latencyMs: Date.now() - t0,
       success: false,
-      error: e?.message ?? "unknown",
+      error: "GEMINI_API_KEY missing",
+      latencyMs: 0,
+      tokensUsed: 0,
+      promptTokens: 0,
+      completionTokens: 0,
+      estimatedCost: 0,
     };
   }
+
+  return invokeBase({
+    provider: "gemini",
+
+    exec: async () => {
+      return {
+        candidates: [{ output: "[Gemini non ancora collegata]" }],
+        usage: { prompt_tokens: 0, completion_tokens: 0 },
+      };
+    },
+
+    parse: (raw: any) => ({
+      text: raw?.candidates?.[0]?.output ?? "",
+      promptTokens: raw?.usage?.prompt_tokens ?? 0,
+      completionTokens: raw?.usage?.completion_tokens ?? 0,
+    }),
+
+    timeoutMs: PROVIDER_TIMEOUT_MS,
+
+    cost: () => 0,
+  });
 }
-// ⬆️ FINE BLOCCO 6
+
+// ⬆️ FINE BLOCCO 3.2

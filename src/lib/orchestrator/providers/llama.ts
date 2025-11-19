@@ -1,49 +1,46 @@
-// ⬇️ BLOCCO 8 — /src/lib/orchestrator/providers/llama.ts
-// ANOVA_ORCHESTRATOR_V42
+// ⬇️ BLOCCO 3.4 — LLaMA Provider (Skeleton)
+// ANOVA_ORCHESTRATOR_V50_PROVIDER_LLAMA
 
-import { withTimeout } from "./_base";
+import { invokeBase } from "./_baseProvider";
 import type { ProviderResponse } from "../types";
 import { PROVIDER_TIMEOUT_MS } from "../policy";
 
 export async function invokeLlama(prompt: string): Promise<ProviderResponse> {
-  const t0 = Date.now();
-  try {
-    const key = process.env.LLAMA_API_KEY;
-    if (!key) throw new Error("LLAMA_API_KEY missing");
-
-    // Esempio: Together/Groq — adatta l’URL al tuo provider
-    const r = await withTimeout(
-      fetch("https://api.together.xyz/v1/chat/completions", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${key}`,
-        },
-        body: JSON.stringify({
-          model: "meta-llama/Meta-Llama-3.1-70B-Instruct-Turbo",
-          messages: [{ role: "user", content: prompt }],
-          temperature: 0.3,
-        }),
-      }).then((res) => res.json()),
-      PROVIDER_TIMEOUT_MS
-    );
-
-    const text = r?.choices?.[0]?.message?.content ?? "";
-    return {
-      provider: "llama",
-      text,
-      latencyMs: Date.now() - t0,
-      success: Boolean(text),
-      error: text ? undefined : "empty_response",
-    };
-  } catch (e: any) {
+  const key = process.env.LLAMA_API_KEY;
+  if (!key) {
     return {
       provider: "llama",
       text: "",
-      latencyMs: Date.now() - t0,
       success: false,
-      error: e?.message ?? "unknown",
+      error: "LLAMA_API_KEY missing",
+      latencyMs: 0,
+      tokensUsed: 0,
+      promptTokens: 0,
+      completionTokens: 0,
+      estimatedCost: 0,
     };
   }
+
+  return invokeBase({
+    provider: "llama",
+
+    exec: async () => {
+      return {
+        output: "[LLAMA non ancora collegata]",
+        usage: { prompt_tokens: 0, completion_tokens: 0 },
+      };
+    },
+
+    parse: (raw: any) => ({
+      text: raw?.output ?? "",
+      promptTokens: raw?.usage?.prompt_tokens ?? 0,
+      completionTokens: raw?.usage?.completion_tokens ?? 0,
+    }),
+
+    timeoutMs: PROVIDER_TIMEOUT_MS,
+
+    cost: () => 0,
+  });
 }
-// ⬆️ FINE BLOCCO 8
+
+// ⬆️ FINE BLOCCO 3.4
