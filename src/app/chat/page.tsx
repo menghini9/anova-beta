@@ -108,6 +108,10 @@ useEffect(() => {
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   // Debug tecnico AI (non persistente)
   const [debugInfo, setDebugInfo] = useState<any | null>(null);
+// ⬇️ BLOCCO 15.0 — Stati Sidebar Orchestratore
+const [showOrchestrator, setShowOrchestrator] = useState(false);
+const [orchWidth, setOrchWidth] = useState(380); // larghezza iniziale sidebar
+// ⬆️ FINE BLOCCO 15.0
 
   const bottomRef = useRef<HTMLDivElement | null>(null);
 
@@ -869,8 +873,16 @@ setDebugInfo({
         </div>
       </aside>
 
-      {/* COLONNA CHAT */}
-      <div className="flex-1 flex flex-col">
+{/* COLONNA CHAT */}
+<div
+  className="flex-1 flex flex-col transition-all duration-200"
+  style={{
+    width: showOrchestrator ? `calc(100vw - ${orchWidth}px)` : "100vw",
+    marginRight: showOrchestrator ? `${orchWidth}px` : "0px",
+  }}
+>
+
+
         {/* HEADER */}
         <header className="flex justify-between items-center px-6 py-4 border-b border-neutral-800">
           <div className="flex items-center gap-3">
@@ -965,6 +977,14 @@ setDebugInfo({
   )}
 </div>
 
+{/* Orchestratore */}
+<button
+  onClick={() => setShowOrchestrator((v) => !v)}
+  className="px-3 py-1 text-sm border border-neutral-700 rounded-lg hover:bg-neutral-900 transition"
+>
+  {showOrchestrator ? "Chiudi Orchestratore" : "Orchestratore >"}
+</button>
+
 
   {/* Nuova Chat */}
   <button
@@ -1044,10 +1064,74 @@ setDebugInfo({
   />
 )}
 
- <OrchestratorPanel data={debugInfo} />
+{/* ⬇️ BLOCCO 15.4 — Sidebar Orchestratore (Split + Drag) */}
+<div
+  className={`
+    fixed top-0 right-0 h-full bg-neutral-950 border-l border-neutral-800
+    z-40 transition-transform duration-200
+    ${showOrchestrator ? "translate-x-0" : "translate-x-full"}
+  `}
+  style={{
+    width: `${orchWidth}px`,
+    minWidth: "50px",
+    maxWidth: "100vw",
+  }}
+>
 
-    </main>   //* ⬅️ CHIUSURA MAIN MANCANTE */
-  );
-}             {/* ⬅️ CHIUSURA FUNZIONE */}
+  {/* Testata con X */}
+  <div className="flex items-center justify-between px-4 py-3 border-b border-neutral-800">
+    <h2 className="text-lg font-semibold">Orchestratore</h2>
+    <button
+      onClick={() => setShowOrchestrator(false)}
+      className="text-neutral-400 hover:text-white text-xl font-bold"
+    >
+      ×
+    </button>
+  </div>
+
+  {/* Contenuto */}
+  <div className="h-full overflow-y-auto p-4">
+    <OrchestratorPanel
+      open={showOrchestrator}
+      onClose={() => setShowOrchestrator(false)}
+      data={debugInfo}
+    />
+  </div>
+
+  {/* Maniglia di drag */}
+  <div
+    className="absolute left-0 top-0 h-full w-[6px] cursor-ew-resize bg-neutral-800/30 hover:bg-neutral-700/50"
+    onMouseDown={(e) => {
+      e.preventDefault();
+      const startX = e.clientX;
+      const startWidth = orchWidth;
+
+      const onMove = (ev: MouseEvent) => {
+        const delta = startX - ev.clientX;
+        const newWidth = startWidth + delta;
+
+        // Auto-close
+        if (newWidth < 60) {
+          setShowOrchestrator(false);
+          return;
+        }
+
+        if (newWidth >= 60 && newWidth <= window.innerWidth) {
+          setOrchWidth(newWidth);
+        }
+      };
+
+      const onUp = () => {
+        window.removeEventListener("mousemove", onMove);
+        window.removeEventListener("mouseup", onUp);
+      };
+
+      window.addEventListener("mousemove", onMove);
+      window.addEventListener("mouseup", onUp);
+    }}
+  />
+</div>
+{/* ⬆️ FINE BLOCCO 15.4 */}
+
 
 // ⬆️ FINE BLOCCO 14.0 — v4.1
