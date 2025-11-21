@@ -1,11 +1,10 @@
-// ⬇️ BLOCCO 14.0 — ANOVA β Chat v4.1 (Definitiva: SSR-safe + Cache + Low Read + Persistenza)
 "use client";
 
-// ❗️ Disabilito ogni forma di prerender/SSR per la pagina
+// ❗ Disabilito ogni forma di prerender/SSR per la pagina
 export const dynamic = "force-dynamic";
 export const fetchCache = "force-no-store";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   collection,
   addDoc,
@@ -24,12 +23,16 @@ import { EMPTY_AI_USAGE } from "@/types/ai";
 
 import AICostPanel from "@/components/panels/AICostPanel";
 import FirestoreCostPanel from "@/components/panels/FirestoreCostPanel";
-import AITechPanel from "@/components/panels/AITechPanel";
-import OrchestratorPanel from "@/components/OrchestratorPanel";
 
-/* =========================================================
-   🧩 Tipi
-   ========================================================= */
+import ChatHeader from "././components/ChatHeader";
+import ChatMessages from "././components/ChatMessages";
+import ChatInput from "././components/ChatInput";
+import ChatSidePanels from "././components/ChatSidePanels";
+import ChatOrchestratorSidebar from "././components/ChatOrchestratorSidebar";
+
+/* ===========================
+   Tipi interni
+   =========================== */
 interface Message {
   id?: string;
   sender: "user" | "anova";
@@ -46,9 +49,13 @@ interface SessionMeta {
   deleted?: boolean;
 }
 
-/* =========================================================
-   🔒 Helpers SSR-safe per localStorage
-   ========================================================= */
+type SessionCache = {
+  [sid: string]: { messages: Message[]; title: string; ts: number };
+};
+
+/* ===========================
+   Helpers LocalStorage SSR-safe
+   =========================== */
 const hasWindow = () => typeof window !== "undefined";
 const safeGet = (k: string) => (hasWindow() ? window.localStorage.getItem(k) : null);
 const safeSet = (k: string, v: string) => {
@@ -58,63 +65,33 @@ const safeRemove = (k: string) => {
   if (hasWindow()) window.localStorage.removeItem(k);
 };
 
-/* =========================================================
-   🔢 Prezzi (piano Blaze indicativo)
-   ========================================================= */
-const PRICE_READS_PER_100K = 0.06;
-const PRICE_WRITES_PER_100K = 0.18;
-
-// ⬇️ BLOCCO 14.1.A — Costanti AI mancanti (ripristinate)
-// 🔐 Chiave per salvare su localStorage
-const AI_USAGE_LS_KEY = "anova_ai_usage_v2";
-
-// 💰 Prezzi simulati (USD per 1000 token)
-const AI_PRICE_TABLE: Record<ProviderKey, { inPer1K: number; outPer1K: number }> = {
-  openai: { inPer1K: 0.003, outPer1K: 0.006 },
-  anthropic: { inPer1K: 0.003, outPer1K: 0.006 },
-  gemini: { inPer1K: 0.002, outPer1K: 0.004 },
-  mistral: { inPer1K: 0.002, outPer1K: 0.006 },
-  llama: { inPer1K: 0.001, outPer1K: 0.002 },
-  web: { inPer1K: 0.0005, outPer1K: 0.0005 },
-};
-
-// ⬆️ FINE BLOCCO 14.2
-
-
-/* =========================================================
-   🧠 Cache Intelligente (in-memory)
-   - evita riattacchi immediati del listener su riaperture ravvicinate
-   - TTL configurabile (ms)
-   ========================================================= */
-type SessionCache = {
-  [sid: string]: { messages: Message[]; title: string; ts: number };
-};
+// Cache sessioni in memoria (per riaperture rapide)
 const CACHE_TTL_MS = 30_000;
 
-/* =========================================================
-   ⛳ Pagina Chat
-   ========================================================= */
+// Chiave unica per uso AI
+const AI_USAGE_LS_KEY = "anovaAiUsageV1";
+
+/* ===========================
+   Pagina Chat
+   =========================== */
 export default function ChatPage() {
-
-const [hydrated, setHydrated] = useState(false);
-
-useEffect(() => {
-  setHydrated(true);
-}, []);
-
-  // Stati principali (NO accessi a localStorage in init!)
+  // Messaggi e input
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
+
+  // Toast
   const [toastMessage, setToastMessage] = useState<string | null>(null);
-  // Debug tecnico AI (non persistente)
+
+  // Debug tecnico AI (orchestratore)
   const [debugInfo, setDebugInfo] = useState<any | null>(null);
-// ⬇️ BLOCCO 15.0 — Stati Sidebar Orchestratore
-const [showOrchestrator, setShowOrchestrator] = useState(false);
-const [orchWidth, setOrchWidth] = useState(380); // larghezza iniziale sidebar
-// ⬆️ FINE BLOCCO 15.0
+
+  // Orchestratore laterale
+  const [showOrchestrator, setShowOrchestrator] = useState(false);
+  const [orchWidth, setOrchWidth] = useState(420); // larghezza iniziale sidebar
 
   const bottomRef = useRef<HTMLDivElement | null>(null);
 
+  // Sessioni
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [sessionTitle, setSessionTitle] = useState<string>("");
   const [editingTitle, setEditingTitle] = useState<boolean>(false);
@@ -125,98 +102,61 @@ const [orchWidth, setOrchWidth] = useState(380); // larghezza iniziale sidebar
   const [sessions, setSessions] = useState<SessionMeta[]>([]);
   const [trashSessions, setTrashSessions] = useState<SessionMeta[]>([]);
 
-  // Rinomina inline
+  // Rinomina inline archivio/cestino
   const [inlineEditId, setInlineEditId] = useState<string | null>(null);
   const [inlineEditValue, setInlineEditValue] = useState<string>("");
 
-  // Ricerca
-  const [searchArchive, setSearchArchive] = useState("");
-  const [searchTrash, setSearchTrash] = useState("");
+  // Pannelli
+  const [showAICostPanel, setShowAICostPanel] = useState(false);
+  const [showFirestorePanel, setShowFirestorePanel] = useState(false);
+  const [showPanelsMenu, setShowPanelsMenu] = useState(false);
 
-  // Modali pannelli
-const [showTechPanel, setShowTechPanel] = useState(false);
-const [showAICostPanel, setShowAICostPanel] = useState(false);
-const [showFirestorePanel, setShowFirestorePanel] = useState(false);
-
-const [showPanelsMenu, setShowPanelsMenu] = useState(false);
-
-
-  // Contatori persistenti (inizializzati a 0, poi caricati in useEffect)
+  // Contatori Firestore
   const [totalReads, setTotalReads] = useState<number>(0);
   const [totalWrites, setTotalWrites] = useState<number>(0);
-  
-// Uso cumulativo delle AI (simulato, persistente)
-const [aiUsage, setAiUsage] = useState<AiUsage>(() => {
-  if (!hasWindow()) return EMPTY_AI_USAGE;
 
-// Modali pannelli
-  try {
-    const raw = safeGet("anovaAiUsageV1");
-    if (raw) {
-      const parsed = JSON.parse(raw);
-      return parsed;
+  // Uso cumulativo delle AI (persistente)
+  const [aiUsage, setAiUsage] = useState<AiUsage>(() => {
+    if (!hasWindow()) return EMPTY_AI_USAGE;
+    try {
+      const raw = safeGet(AI_USAGE_LS_KEY);
+      if (raw) return JSON.parse(raw);
+    } catch {
+      // se corrotto, riparto pulito
     }
-  } catch {
-    // se c'è qualcosa di corrotto, ripartiamo puliti
-  }
+    return EMPTY_AI_USAGE;
+  });
 
-  return EMPTY_AI_USAGE;
-});
-
-  // Helpers costo
+  // Helpers costo Firestore
   const incRead = (n = 1) => setTotalReads((v) => v + n);
   const incWrite = (n = 1) => setTotalWrites((v) => v + n);
 
-  // Persistenza automatica (solo client)
+  // Persistenza contatori
   useEffect(() => {
     if (!hasWindow()) return;
     safeSet("anovaTotalReads", String(totalReads));
   }, [totalReads]);
+
   useEffect(() => {
     if (!hasWindow()) return;
     safeSet("anovaTotalWrites", String(totalWrites));
   }, [totalWrites]);
 
-// 💾 Salva sempre ogni cambiamento in localStorage
-useEffect(() => {
-  if (!hasWindow()) return;
-  safeSet("anovaAiUsageV1", JSON.stringify(aiUsage));
-}, [aiUsage]);
+  // Persistenza uso AI
+  useEffect(() => {
+    if (!hasWindow()) return;
+    safeSet(AI_USAGE_LS_KEY, JSON.stringify(aiUsage));
+  }, [aiUsage]);
 
-
-
-useEffect(() => {
-  if (!hasWindow()) return;
-  safeSet("anovaAiUsageV1", JSON.stringify(aiUsage));
-}, [aiUsage]);
-
-
-  const resetCounters = () => {
-    safeRemove("anovaTotalReads");
-    safeRemove("anovaTotalWrites");
-    setTotalReads(0);
-    setTotalWrites(0);
-  };
-
-  // Cache in-memory e gestione listener
-  const cacheRef = useRef<SessionCache>({});
-  const activeMsgUnsubRef = useRef<null | (() => void)>(null);
-  const activeTitleUnsubRef = useRef<null | (() => void)>(null);
-  const delayedAttachTimerRef = useRef<null | number>(null);
-
-  // ---------------------------------------
-  // Bootstrap lato client (carica LS e crea/recupera sessione)
-  // ---------------------------------------
+  // Bootstrap: carico contatori + creo/recupero sessione
   useEffect(() => {
     if (!hasWindow()) return;
 
-    // carico contatori persistenti
     const savedR = safeGet("anovaTotalReads");
     const savedW = safeGet("anovaTotalWrites");
     if (savedR) setTotalReads(parseInt(savedR, 10) || 0);
     if (savedW) setTotalWrites(parseInt(savedW, 10) || 0);
 
-    // sessione
     let sid = safeGet("anovaSessionId");
     if (!sid) {
       sid = Date.now().toString();
@@ -224,7 +164,6 @@ useEffect(() => {
     }
     setSessionId(sid);
 
-    // crea/merge doc sessione
     const sessRef = doc(db, "sessions", sid);
     setDoc(
       sessRef,
@@ -239,9 +178,13 @@ useEffect(() => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ---------------------------------------
-  // Listener Archivio + Cestino (Low Read Mode)
-  // ---------------------------------------
+  // Cache in-memory + riferimenti listener
+  const cacheRef = useRef<SessionCache>({});
+  const activeMsgUnsubRef = useRef<null | (() => void)>(null);
+  const activeTitleUnsubRef = useRef<null | (() => void)>(null);
+  const delayedAttachTimerRef = useRef<null | number>(null);
+
+  // Listener Archivio + Cestino
   useEffect(() => {
     const sessionsRef = collection(db, "sessions");
     const qAll = query(sessionsRef, orderBy("updatedAt", "desc"), limit(100));
@@ -251,10 +194,10 @@ useEffect(() => {
         id: d.id,
         ...(d.data() as Omit<SessionMeta, "id">),
       }));
+
       setSessions(list.filter((s) => !s.deleted));
       setTrashSessions(list.filter((s) => s.deleted));
 
-      // conteggio letture realistico: #docChanges (fallback 1)
       const changes = snap.docChanges().length;
       incRead(Math.max(1, changes));
     });
@@ -263,11 +206,9 @@ useEffect(() => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ---------------------------------------
-  // Gestione Listener per Sessione Attiva (Title + Messages) con Cache
-  // ---------------------------------------
+  // Listener Sessione attiva (titolo + messaggi) con cache intelligente
   useEffect(() => {
-    // cleanup precedente
+    // cleanup vecchi listener
     if (activeMsgUnsubRef.current) {
       activeMsgUnsubRef.current();
       activeMsgUnsubRef.current = null;
@@ -283,7 +224,6 @@ useEffect(() => {
 
     if (!sessionId) return;
 
-    // prova cache
     const cached = cacheRef.current[sessionId];
     const now = Date.now();
     const fresh = cached && now - cached.ts < CACHE_TTL_MS;
@@ -291,7 +231,7 @@ useEffect(() => {
     if (fresh) {
       setMessages(cached.messages);
       setSessionTitle(cached.title || "");
-      // attacco listener con ritardo residuo
+
       const delay = CACHE_TTL_MS - (now - cached.ts);
       if (hasWindow()) {
         delayedAttachTimerRef.current = window.setTimeout(() => {
@@ -302,31 +242,19 @@ useEffect(() => {
       return;
     }
 
-    // senza cache fresca: attacca subito
     attachActiveTitleListener(sessionId);
     attachActiveMessagesListener(sessionId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  },
-  [sessionId]);
-    useEffect(() => {
-    if (!hasWindow()) return;
-    const raw = safeGet(AI_USAGE_LS_KEY);
-    if (!raw) return;
-    try {
-      const parsed = JSON.parse(raw);
-      setAiUsage((prev) => ({ ...prev, ...parsed }));
-    } catch {
-      // se il JSON è corrotto, riparto da zero
+  }, [sessionId]);
+
+  // Auto-scroll in fondo quando arrivano messaggi
+  useEffect(() => {
+    if (bottomRef.current) {
+      bottomRef.current.scrollIntoView({ behavior: "smooth" });
     }
-  }, []);
+  }, [messages]);
 
-useEffect(() => {
-  if (bottomRef.current) {
-    bottomRef.current.scrollIntoView({ behavior: "smooth" });
-  }
-}, [messages]);
-
-  // attach titolo
+  // Attach titolo
   const attachActiveTitleListener = (sid: string) => {
     const sessRef = doc(db, "sessions", sid);
     activeTitleUnsubRef.current = onSnapshot(
@@ -346,100 +274,68 @@ useEffect(() => {
     );
   };
 
-  // attach messaggi (incrementale + low read)
+  // Attach messaggi (incrementale + low read)
   const attachActiveMessagesListener = (sid: string) => {
     const messagesRef = collection(db, "sessions", sid, "messages");
     const qy = query(messagesRef, orderBy("createdAt", "desc"), limit(50));
 
-    activeMsgUnsubRef.current = onSnapshot(qy, { includeMetadataChanges: false }, (snap) => {
-      const changes = snap.docChanges();
+    activeMsgUnsubRef.current = onSnapshot(
+      qy,
+      { includeMetadataChanges: false },
+      (snap) => {
+        const changes = snap.docChanges();
 
-      setMessages((prev) => {
-        let updated = prev.length ? [...prev] : [];
+        setMessages((prev) => {
+          let updated = prev.length ? [...prev] : [];
 
-        // primo snapshot: carico tutto
-        if (updated.length === 0) {
-          const first: Message[] = snap.docs
-            .map((d) => ({ id: d.id, ...(d.data() as Message) }))
-            .reverse();
-          updated = first;
-          incRead(changes.length > 0 ? changes.length : first.length || 1);
+          if (updated.length === 0) {
+            const first: Message[] = snap.docs
+              .map((d) => ({ id: d.id, ...(d.data() as Message) }))
+              .reverse();
+            updated = first;
+            incRead(changes.length > 0 ? changes.length : first.length || 1);
+
+            cacheRef.current[sid] = {
+              messages: first,
+              title: cacheRef.current[sid]?.title || sessionTitle || "",
+              ts: Date.now(),
+            };
+            return first;
+          }
+
+          for (const c of changes) {
+            const data = { id: c.doc.id, ...(c.doc.data() as Message) };
+            if (c.type === "added") {
+              if (!updated.find((m) => m.id === data.id)) updated.push(data);
+            } else if (c.type === "modified") {
+              const idx = updated.findIndex((m) => m.id === data.id);
+              if (idx !== -1) updated[idx] = data;
+            } else if (c.type === "removed") {
+              updated = updated.filter((m) => m.id !== data.id);
+            }
+          }
+
+          updated.sort(
+            (a, b) => (a.createdAt?.seconds || 0) - (b.createdAt?.seconds || 0)
+          );
+          incRead(Math.max(1, changes.length));
 
           cacheRef.current[sid] = {
-            messages: first,
+            messages: updated,
             title: cacheRef.current[sid]?.title || sessionTitle || "",
             ts: Date.now(),
           };
-          return first;
-        }
 
-        // incrementale
-        for (const c of changes) {
-          const data = { id: c.doc.id, ...(c.doc.data() as Message) };
-          if (c.type === "added") {
-            if (!updated.find((m) => m.id === data.id)) updated.push(data);
-          } else if (c.type === "modified") {
-            const idx = updated.findIndex((m) => m.id === data.id);
-            if (idx !== -1) updated[idx] = data;
-          } else if (c.type === "removed") {
-            updated = updated.filter((m) => m.id !== data.id);
-          }
-        }
-
-        updated.sort((a, b) => (a.createdAt?.seconds || 0) - (b.createdAt?.seconds || 0));
-        incRead(Math.max(1, changes.length));
-
-        cacheRef.current[sid] = {
-          messages: updated,
-          title: cacheRef.current[sid]?.title || sessionTitle || "",
-          ts: Date.now(),
-        };
-
-        return updated;
-      });
-    });
+          return updated;
+        });
+      }
+    );
   };
-  // ---------------------------------------
-  // Aggiornamento costi AI (simulazione)
-  // ---------------------------------------
-// ⬇️ BLOCCO 14.1.B — Update AiUsage compatibile con la nuova struttura
-function updateAiUsageFromRaw(raw: any[]) {
-  setAiUsage(prev => {
-    const next: AiUsage = structuredClone(prev);
 
-    raw.forEach(r => {
-      const provider = r.provider as ProviderKey;
-      if (!provider) return;
+  /* ===========================
+     Gestione sessioni
+     =========================== */
 
-      const tokens = r.tokensUsed ?? 0;
-      const cost = r.estimatedCost ?? 0;
-
-      // Aggiorna per provider
-      const p = next.perProvider[provider];
-      p.calls += 1;
-      p.tokens += tokens;
-      p.costUsd += cost;
-
-      // Aggiorna totali generali
-      next.totalCalls += 1;
-      next.totalTokens += tokens;
-      next.totalCostUsd += cost;
-    });
-
-    // Persistenza locale
-    if (hasWindow()) {
-      safeSet(AI_USAGE_LS_KEY, JSON.stringify(next));
-    }
-
-    return next;
-  });
-}
-// ⬆️ FINE BLOCCO 14.1.B
-
-
-  // ---------------------------------------
-  // Nuova Sessione
-  // ---------------------------------------
   const handleNewSession = async () => {
     const newId = Date.now().toString();
     safeSet("anovaSessionId", newId);
@@ -470,22 +366,22 @@ function updateAiUsageFromRaw(raw: any[]) {
     setTimeout(() => setToastMessage(null), 1800);
   };
 
-  // ---------------------------------------
-  // Rinomina (attiva + inline)
-  // ---------------------------------------
   const commitActiveTitle = async () => {
     if (!sessionId) return;
     const clean = sessionTitle?.trim();
+
     await updateDoc(doc(db, "sessions", sessionId), {
       title: clean ? clean : null,
       updatedAt: serverTimestamp(),
     });
     incWrite();
+
     cacheRef.current[sessionId] = {
       messages: cacheRef.current[sessionId]?.messages || [],
       title: clean || "",
       ts: Date.now(),
     };
+
     setEditingTitle(false);
     setToastMessage("✏️ Titolo aggiornato");
     setTimeout(() => setToastMessage(null), 1200);
@@ -519,9 +415,6 @@ function updateAiUsageFromRaw(raw: any[]) {
     setTimeout(() => setToastMessage(null), 1000);
   };
 
-  // ---------------------------------------
-  // Apri / Cestina / Ripristina
-  // ---------------------------------------
   const handleOpenSession = (id: string) => {
     safeSet("anovaSessionId", id);
     setSessionId(id);
@@ -551,587 +444,217 @@ function updateAiUsageFromRaw(raw: any[]) {
     setTimeout(() => setToastMessage(null), 1200);
   };
 
-  // ---------------------------------------
-  // Simulazione AI locale (placeholder)
-  // ---------------------------------------
-  const generateLocalResponse = (prompt: string) => {
-    const lower = prompt.toLowerCase();
-    if (lower.includes("ciao")) return "Ciao Luca. Sono pronta per lavorare insieme in Anova β.";
-    if (lower.includes("test") || lower.includes("prova")) return "Test completato con successo. Sistema stabile.";
-    if (lower.includes("chi sei")) return "Sono Anova β — il tuo ambiente operativo cognitivo.";
-    return "Ricevuto. Elaboro il contesto e preparo una risposta.";
-  };
+  /* ===========================
+     Invio messaggi + orchestratore
+     =========================== */
 
-  // ---------------------------------------
-  // Invio messaggi (+ meta update + debug AI)
-  // ---------------------------------------
-  async function safeFetchAI(prompt: string) {
-  for (let i = 0; i < 2; i++) {
+  const handleSend = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const trimmed = input.trim();
+    if (!trimmed || !sessionId) return;
+
+    const messagesRef = collection(db, "sessions", sessionId, "messages");
+
+    // 1️⃣ Messaggio utente
+    await addDoc(messagesRef, {
+      sender: "user",
+      text: trimmed,
+      createdAt: serverTimestamp(),
+    });
+    incWrite(2);
+
+    await updateDoc(doc(db, "sessions", sessionId), {
+      updatedAt: serverTimestamp(),
+      lastMessage: trimmed,
+    });
+    incWrite();
+
+    setInput("");
+
+    // 2️⃣ Chiamata orchestratore
+    let aiResponse = "Elaborazione in corso...";
+    let costThisRequest = 0;
+    let rawProviders: any[] = [];
+
     try {
       const res = await fetch("/api/orchestrate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ prompt }),
+        body: JSON.stringify({ prompt: trimmed, userId: sessionId }),
       });
-      if (!res.ok) throw new Error("Response error");
-      return await res.json();
-    } catch (e) {
-      await new Promise(r => setTimeout(r, 200)); // retry dopo 200ms
+
+      const data = await res.json();
+
+      setDebugInfo({
+        // per pannelli tecnici
+        raw: data.raw || [],
+        meta: data.meta || {},
+      });
+
+      aiResponse =
+        data?.fusion?.finalText ||
+        "⚠️ Nessuna risposta utile dall'orchestratore.";
+
+      costThisRequest = data?.costThisRequest ?? 0;
+      rawProviders = Array.isArray(data?.raw) ? data.raw : [];
+
+      console.log("🧠 ANOVA β — Risposta fusa:", data.fusion);
+      console.log("🧠 ANOVA β — Meta:", data.meta);
+      console.log("🧠 ANOVA β — Costo richiesta:", costThisRequest);
+    } catch (err) {
+      console.error("Errore chiamata orchestratore:", err);
+      aiResponse = "❌ Errore nel motore cognitivo. Riprova.";
     }
-  }
-  throw new Error("AI unreachable");
-}
 
-const handleSend = async (e: React.FormEvent) => {
-  e.preventDefault();
-  const trimmed = input.trim();
-  if (!trimmed || !sessionId) return;
-
-  const messagesRef = collection(db, "sessions", sessionId, "messages");
-
-  // 1️⃣ Salvo il messaggio dell'utente
-  await addDoc(messagesRef, {
-    sender: "user",
-    text: trimmed,
-    createdAt: serverTimestamp(),
-  });
-  incWrite(2);
-
-  await updateDoc(doc(db, "sessions", sessionId), {
-    updatedAt: serverTimestamp(),
-    lastMessage: trimmed,
-  });
-  incWrite();
-
-  setInput("");
-
-  // 2️⃣ Chiamata all'orchestratore cognitivo
-  let aiResponse = "Elaborazione in corso...";
-  let costThisRequest = 0;
-  let rawProviders: any[] = [];
-
-  try {
-    const res = await fetch("/api/orchestrate", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ prompt: trimmed, userId: sessionId }),
-    });
-
-    const data = await res.json();
-
- // 🔍 debug tecnico per il pannello AI (versione strutturata)
-setDebugInfo({
-  model: data?.meta?.model || data?.raw?.[0]?.model || "N/D",
-  provider: data?.meta?.provider || data?.raw?.[0]?.provider || "N/D",
-
-  inputTokens: data?.meta?.tokens?.input ?? 0,
-  outputTokens: data?.meta?.tokens?.output ?? 0,
-
-  fusionScore: data?.fusion?.fusionScore ?? null,
-  latencyMs: data?.meta?.latencyMs ?? null,
-
-  // extra info utile (non mostrata ma disponibile)
-  raw: data.raw || [],
-  meta: data.meta || {},
-});
-
-
-
-    aiResponse =
-      data?.fusion?.finalText ||
-      "⚠️ Nessuna risposta utile dall'orchestratore.";
-
-    costThisRequest = data?.costThisRequest ?? 0;
-    rawProviders = Array.isArray(data?.raw) ? data.raw : [];
-
-    console.log("🧠 ANOVA β — Risposta fusa:", data.fusion);
-    console.log("🧠 ANOVA β — Meta:", data.meta);
-    console.log("🧠 ANOVA β — Costo richiesta:", costThisRequest);
-  } catch (err) {
-    console.error("Errore chiamata orchestratore:", err);
-    aiResponse = "❌ Errore nel motore cognitivo. Riprova.";
-  }
-
-  // 3️⃣ Aggiorno uso AI cumulativo (solo se ci sono provider)
-  if (rawProviders.length > 0 || costThisRequest > 0) {
-    setAiUsage((prev) => {
-      const next: AiUsage = {
-        ...prev,
-        totalCalls: prev.totalCalls,
-        totalCostUsd: prev.totalCostUsd + costThisRequest,
-        totalTokens: prev.totalTokens,
-        perProvider: { ...prev.perProvider },
-      };
-
-      // Somma per provider
-      (rawProviders as any[]).forEach((r) => {
-        const pid = r.provider as ProviderKey;
-        if (!pid || !next.perProvider[pid]) return;
-
-        const cost = r.estimatedCost ?? 0;
-        const tokens = r.tokensUsed ?? 0;
-
-        next.totalCalls += 1;
-        next.totalTokens += tokens;
-
-        const prevProv = next.perProvider[pid];
-        next.perProvider[pid] = {
-          calls: prevProv.calls + 1,
-          costUsd: prevProv.costUsd + cost,
-          tokens: prevProv.tokens + tokens,
+    // 3️⃣ Aggiorno uso AI cumulativo
+    if (rawProviders.length > 0 || costThisRequest > 0) {
+      setAiUsage((prev) => {
+        const next: AiUsage = {
+          ...prev,
+          totalCalls: prev.totalCalls,
+          totalCostUsd: prev.totalCostUsd + costThisRequest,
+          totalTokens: prev.totalTokens,
+          perProvider: { ...prev.perProvider },
         };
+
+        (rawProviders as any[]).forEach((r) => {
+          const pid = r.provider as ProviderKey;
+          if (!pid || !next.perProvider[pid]) return;
+
+          const cost = r.estimatedCost ?? 0;
+          const tokens = r.tokensUsed ?? 0;
+
+          next.totalCalls += 1;
+          next.totalTokens += tokens;
+
+          const prevProv = next.perProvider[pid];
+          next.perProvider[pid] = {
+            calls: prevProv.calls + 1,
+            costUsd: prevProv.costUsd + cost,
+            tokens: prevProv.tokens + tokens,
+          };
+        });
+
+        return next;
       });
+    }
 
-      return next;
+    // 4️⃣ Salvo la risposta di Anova
+    await addDoc(messagesRef, {
+      sender: "anova",
+      text: aiResponse,
+      createdAt: serverTimestamp(),
     });
-  }
+    incWrite(2);
 
-  // 4️⃣ Salvo la risposta di ANOVA nel thread
-  await addDoc(messagesRef, {
-    sender: "anova",
-    text: aiResponse,
-    createdAt: serverTimestamp(),
-  });
-  incWrite(2);
+    await updateDoc(doc(db, "sessions", sessionId), {
+      updatedAt: serverTimestamp(),
+      lastMessage: aiResponse,
+    });
+    incWrite();
 
-  await updateDoc(doc(db, "sessions", sessionId), {
-    updatedAt: serverTimestamp(),
-    lastMessage: aiResponse,
-  });
-  incWrite();
-
-  // aggiorna cache locale
-  cacheRef.current[sessionId] = {
-    messages: [
-      ...(cacheRef.current[sessionId]?.messages || []),
-      { sender: "user", text: trimmed },
-      { sender: "anova", text: aiResponse },
-    ],
-    title: cacheRef.current[sessionId]?.title || sessionTitle || "",
-    ts: Date.now(),
+    cacheRef.current[sessionId] = {
+      messages: [
+        ...(cacheRef.current[sessionId]?.messages || []),
+        { sender: "user", text: trimmed },
+        { sender: "anova", text: aiResponse },
+      ],
+      title: cacheRef.current[sessionId]?.title || sessionTitle || "",
+      ts: Date.now(),
+    };
   };
-};
 
+  /* ===========================
+     UI
+     =========================== */
 
+  const handleToggleOrchestrator = () => {
+    setShowOrchestrator((v) => !v);
+  };
 
-  // ---------------------------------------
-  // Filtri ricerca archivio/cestino
-  // ---------------------------------------
-  const filteredArchive = useMemo(() => {
-    const t = searchArchive.toLowerCase().trim();
-    if (!t) return sessions;
-    return sessions.filter((s) => {
-      const title = (s.title || "").toLowerCase();
-      const id = s.id.toLowerCase();
-      const last = (s.lastMessage || "").toLowerCase();
-      return title.includes(t) || id.includes(t) || last.includes(t);
-    });
-  }, [sessions, searchArchive]);
-
-  const filteredTrash = useMemo(() => {
-    const t = searchTrash.toLowerCase().trim();
-    if (!t) return trashSessions;
-    return trashSessions.filter((s) => {
-      const title = (s.title || "").toLowerCase();
-      const id = s.id.toLowerCase();
-      const last = (s.lastMessage || "").toLowerCase();
-      return title.includes(t) || id.includes(t) || last.includes(t);
-    });
-  }, [trashSessions, searchTrash]);
-
-  // ---------------------------------------
-  // UI Completa
-  // ---------------------------------------
   return (
-   <main className="h-screen w-screen flex bg-black text-neutral-100 relative overflow-x-hidden">
+    <main className="h-screen w-screen flex bg-black text-neutral-100 relative overflow-hidden">
+      {/* Sidebar archivio + cestino */}
+      <ChatSidePanels
+        showArchive={showArchive}
+        showTrash={showTrash}
+        setShowArchive={setShowArchive}
+        setShowTrash={setShowTrash}
+        sessions={sessions}
+        trashSessions={trashSessions}
+        inlineEditId={inlineEditId}
+        inlineEditValue={inlineEditValue}
+        setInlineEditValue={setInlineEditValue}
+        startInlineRename={startInlineRename}
+        commitInlineRename={commitInlineRename}
+        handleOpenSession={handleOpenSession}
+        handleDeleteSession={handleDeleteSession}
+        handleRestoreSession={handleRestoreSession}
+      />
 
-      {/* ARCHIVIO */}
-      <aside
-        className={`fixed top-0 left-0 h-full w-80 bg-neutral-950 border-r border-neutral-800 z-40 transition-transform duration-300 ${
-          showArchive ? "translate-x-0" : "-translate-x-full"
-        }`}
-      >
-        <div className="px-5 py-4 flex items-center justify-between border-b border-neutral-800">
-          <h3 className="text-base font-semibold">Archivio</h3>
-          <button onClick={() => setShowArchive(false)} className="text-sm text-neutral-400 hover:text-white">
-            Chiudi
-          </button>
-        </div>
-        <div className="px-4 py-3 border-b border-neutral-800">
-          <input
-            type="text"
-            placeholder="Cerca chat…"
-            value={searchArchive}
-            onChange={(e) => setSearchArchive(e.target.value)}
-            className="w-full bg-neutral-900 border border-neutral-700 rounded-lg px-3 py-2 text-sm text-neutral-200 placeholder-neutral-500 focus:outline-none focus:border-white"
-          />
-        </div>
-        <div className="p-3 overflow-y-auto h-[calc(100%-110px)] space-y-2">
-          {filteredArchive.length === 0 ? (
-            <div className="text-neutral-600 text-sm px-2 py-4">Nessuna sessione.</div>
-          ) : (
-            filteredArchive.map((s) => (
-              <div key={s.id} className="border border-neutral-800 rounded-lg p-2 hover:bg-neutral-900 transition">
-                <div className="flex items-center gap-2">
-                  {inlineEditId === s.id ? (
-                    <input
-                      value={inlineEditValue}
-                      onChange={(e) => setInlineEditValue(e.target.value)}
-                      onBlur={() => commitInlineRename(s.id)}
-                      onKeyDown={(e) => e.key === "Enter" && commitInlineRename(s.id)}
-                      autoFocus
-                      className="flex-1 bg-neutral-900 border border-neutral-700 rounded px-2 py-1 text-sm"
-                    />
-                  ) : (
-                    <button onClick={() => handleOpenSession(s.id)} className="text-left text-sm flex-1">
-                      <div className="text-xs text-neutral-400">{s.title?.trim() ? s.title : `#${s.id.slice(-6)}`}</div>
-                      <div className="line-clamp-1 text-neutral-300">{s.lastMessage || "—"}</div>
-                    </button>
-                  )}
-                  <button
-                    onClick={() => (inlineEditId === s.id ? commitInlineRename(s.id) : startInlineRename(s.id, s.title))}
-                    className="text-neutral-400 hover:text-white text-xs px-2"
-                    title="Rinomina"
-                  >
-                    ✏️
-                  </button>
-                  <button
-                    onClick={() => handleDeleteSession(s.id)}
-                    className="text-neutral-500 hover:text-red-400 text-xs px-2"
-                    title="Cestina"
-                  >
-                    🗑️
-                  </button>
-                </div>
-              </div>
-            ))
-          )}
-        </div>
-      </aside>
-
-      {/* CESTINO */}
-      <aside
-        className={`fixed top-0 left-0 h-full w-80 bg-neutral-950 border-r border-neutral-800 z-40 transition-transform duration-300 ${
-          showTrash ? "translate-x-0" : "-translate-x-full"
-        }`}
-      >
-        <div className="px-5 py-4 flex items-center justify-between border-b border-neutral-800">
-          <h3 className="text-base font-semibold">Cestino</h3>
-          <button onClick={() => setShowTrash(false)} className="text-sm text-neutral-400 hover:text-white">
-            Chiudi
-          </button>
-        </div>
-        <div className="px-4 py-3 border-b border-neutral-800">
-          <input
-            type="text"
-            placeholder="Cerca…"
-            value={searchTrash}
-            onChange={(e) => setSearchTrash(e.target.value)}
-            className="w-full bg-neutral-900 border border-neutral-700 rounded-lg px-3 py-2 text-sm text-neutral-200 placeholder-neutral-500 focus:outline-none focus:border-white"
-          />
-        </div>
-        <div className="p-3 overflow-y-auto h-[calc(100%-110px)] space-y-2">
-          {filteredTrash.length === 0 ? (
-            <div className="text-neutral-600 text-sm px-2 py-4">Nessuna sessione cestinata.</div>
-          ) : (
-            filteredTrash.map((s) => (
-              <div key={s.id} className="border border-neutral-800 rounded-lg p-2 hover:bg-neutral-900 transition">
-                <div className="flex items-center gap-2">
-                  {inlineEditId === s.id ? (
-                    <input
-                      value={inlineEditValue}
-                      onChange={(e) => setInlineEditValue(e.target.value)}
-                      onBlur={() => commitInlineRename(s.id)}
-                      onKeyDown={(e) => e.key === "Enter" && commitInlineRename(s.id)}
-                      autoFocus
-                      className="flex-1 bg-neutral-900 border border-neutral-700 rounded px-2 py-1 text-sm"
-                    />
-                  ) : (
-                    <div className="flex-1">
-                      <div className="text-neutral-400 line-clamp-1">{s.title?.trim() ? s.title : `#${s.id.slice(-6)}`}</div>
-                      <div className="text-neutral-600 text-xs line-clamp-1">{s.lastMessage || "—"}</div>
-                    </div>
-                  )}
-                  <button
-                    onClick={() => (inlineEditId === s.id ? commitInlineRename(s.id) : startInlineRename(s.id, s.title))}
-                    className="text-neutral-400 hover:text-white text-xs px-2"
-                    title="Rinomina"
-                  >
-                    ✏️
-                  </button>
-                  <button
-                    onClick={() => handleRestoreSession(s.id)}
-                    className="text-green-400 hover:text-green-300 text-xs px-2"
-                    title="Ripristina"
-                  >
-                    ♻️
-                  </button>
-                </div>
-              </div>
-            ))
-          )}
-        </div>
-      </aside>
-
-{/* COLONNA CHAT */}
-<div
-  className="flex-1 flex flex-col transition-all duration-200"
-  style={{
-    width: showOrchestrator ? `calc(100vw - ${orchWidth}px)` : "100vw",
-    marginRight: showOrchestrator ? `${orchWidth}px` : "0px",
-  }}
->
-
-
-        {/* HEADER */}
-        <header className="flex justify-between items-center px-6 py-4 border-b border-neutral-800">
-          <div className="flex items-center gap-3">
-            <h2 className="text-xl font-semibold">
-              Anova<span className="text-neutral-500"> β</span> — Chat
-            </h2>
-            <div className="flex items-center gap-2">
-              {editingTitle ? (
-                <input
-                  value={sessionTitle}
-                  onChange={(e) => setSessionTitle(e.target.value)}
-                  onBlur={commitActiveTitle}
-                  onKeyDown={(e) => e.key === "Enter" && commitActiveTitle()}
-                  className="text-xs px-2 py-1 bg-neutral-900 border border-neutral-700 rounded"
-                  autoFocus
-                  placeholder={`#${sessionId?.slice(-6)}`}
-                />
-              ) : (
-                <button
-                  onClick={() => setEditingTitle(true)}
-                  className="text-xs px-2 py-1 border border-neutral-800 rounded-lg text-neutral-400 hover:text-white"
-                  title="Rinomina sessione"
-                >
-                  {sessionTitle?.trim() ? sessionTitle : `#${sessionId?.slice(-6)}`}
-                </button>
-              )}
-            </div>
-          </div>
-          <div className="flex items-center gap-3">
-
-  {/* Archivio */}
-  <button
-    onClick={() => setShowArchive((v) => !v)}
-    className="px-3 py-1 text-sm border border-neutral-700 rounded-lg hover:bg-neutral-900 transition"
-  >
-    Archivio
-  </button>
-
-  {/* Cestino */}
-  <button
-    onClick={() => setShowTrash((v) => !v)}
-    className="px-3 py-1 text-sm border border-neutral-700 rounded-lg hover:bg-neutral-900 transition"
-  >
-    Cestino
-  </button>
-
-{/* ▼ MENU PANNELLI */}
-{/* ▼ MENU PANNELLI (click-toggle, stabile) */}
-<div className="relative">
-  <button
-    onClick={() => setShowPanelsMenu(prev => !prev)}
-    className="px-3 py-1 text-sm border border-neutral-700 rounded-lg hover:bg-neutral-900 transition cursor-pointer select-none"
-  >
-    Pannelli ▼
-  </button>
-
-  {showPanelsMenu && (
-    <div
-      className="absolute left-0 mt-2 w-56 bg-neutral-900 border border-neutral-700 rounded-lg shadow-xl z-50 p-2 space-y-1"
-    >
-      <button
-        onClick={() => {
-          setShowPanelsMenu(false);
-          setShowTechPanel(true);
+      {/* Colonna centrale: Header fisso + Messaggi + Input */}
+      <div
+        className="flex-1 flex flex-col transition-all duration-200"
+        style={{
+          width: showOrchestrator ? `calc(100vw - ${orchWidth}px)` : "100vw",
+          marginRight: showOrchestrator ? `${orchWidth}px` : 0,
         }}
-        className="block w-full text-left px-3 py-2 text-sm hover:bg-neutral-800 rounded-lg"
       >
-        🧠 Pannello Tecnico AI
-      </button>
+        <ChatHeader
+          sessionId={sessionId}
+          sessionTitle={sessionTitle}
+          setSessionTitle={setSessionTitle}
+          editingTitle={editingTitle}
+          setEditingTitle={setEditingTitle}
+          onCommitTitle={commitActiveTitle}
+          onNewSession={handleNewSession}
+          showArchive={showArchive}
+          showTrash={showTrash}
+          onToggleArchive={() => setShowArchive((v) => !v)}
+          onToggleTrash={() => setShowTrash((v) => !v)}
+          showPanelsMenu={showPanelsMenu}
+          setShowPanelsMenu={setShowPanelsMenu}
+          onOpenAICostPanel={() => setShowAICostPanel(true)}
+          onOpenFirestorePanel={() => setShowFirestorePanel(true)}
+          showOrchestrator={showOrchestrator}
+          onToggleOrchestrator={handleToggleOrchestrator}
+        />
 
-      <button
-        onClick={() => {
-          setShowPanelsMenu(false);
-          setShowAICostPanel(true);
-        }}
-        className="block w-full text-left px-3 py-2 text-sm hover:bg-neutral-800 rounded-lg"
-      >
-        🤖 Costi AI
-      </button>
+        <ChatMessages messages={messages} bottomRef={bottomRef} />
 
-      <button
-        onClick={() => {
-          setShowPanelsMenu(false);
-          setShowFirestorePanel(true);
-        }}
-        className="block w-full text-left px-3 py-2 text-sm hover:bg-neutral-800 rounded-lg"
-      >
-
-        🔥 Costi Firestore
-      </button>
-    </div>
-  )}
-</div>
-
-{/* Orchestratore */}
-<button
-  onClick={() => setShowOrchestrator((v) => !v)}
-  className="px-3 py-1 text-sm border border-neutral-700 rounded-lg hover:bg-neutral-900 transition"
->
-  {showOrchestrator ? "Chiudi Orchestratore" : "Orchestratore >"}
-</button>
-
-
-  {/* Nuova Chat */}
-  <button
-    onClick={handleNewSession}
-    className="px-3 py-1 text-sm border border-neutral-700 rounded-lg hover:bg-neutral-900 transition"
-  >
-    Nuova Chat
-  </button>
-</div>
-</header>
-
-        {/* AREA MESSAGGI */}
-        <section className="flex-1 overflow-y-auto p-6 space-y-4">
-          {messages.length === 0 ? (
-            <div className="flex h-full items-center justify-center text-neutral-600 text-center">
-              Nessun messaggio ancora. Inizia a dialogare con Anova β.
-            </div>
-          ) : (
-            messages.map((msg) => (
-              <div
-                key={msg.id}
-                className={`max-w-2xl mx-auto rounded-xl p-4 ${
-                  msg.sender === "user"
-                    ? "bg-neutral-900 border border-neutral-700 text-right"
-                    : "bg-neutral-800 border border-neutral-700 text-left"
-                }`}
-              >
-                <p className="text-sm leading-relaxed whitespace-pre-wrap">{msg.text}</p>
-              </div>
-            ))
-          )} <div ref={bottomRef} />
-        </section>
-
-        {/* INPUT */}
-        <form onSubmit={handleSend} className="flex items-center gap-3 border-t border-neutral-800 px-6 py-4 bg-black">
-          <input
-            type="text"
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            placeholder="Scrivi un messaggio..."
-            className="flex-1 bg-neutral-900 border border-neutral-800 rounded-lg px-4 py-2 text-sm focus:outline-none focus:border-white"
-          />
-          <button type="submit" className="bg-white text-black font-medium px-5 py-2 rounded-lg hover:bg-neutral-200 transition">
-            Invia
-          </button>
-        </form>
+        <ChatInput input={input} setInput={setInput} onSend={handleSend} />
       </div>
 
-      {/* TOAST */}
+      {/* Pannelli modali */}
+
+      {showAICostPanel && (
+        <AICostPanel aiUsage={aiUsage} onClose={() => setShowAICostPanel(false)} />
+      )}
+
+      {showFirestorePanel && (
+        <FirestoreCostPanel
+          totalReads={totalReads}
+          totalWrites={totalWrites}
+          onClose={() => setShowFirestorePanel(false)}
+        />
+      )}
+
+      {/* Sidebar orchestratore con drag */}
+      <ChatOrchestratorSidebar
+        open={showOrchestrator}
+        width={orchWidth}
+        setWidth={setOrchWidth}
+        onClose={() => setShowOrchestrator(false)}
+        debugInfo={debugInfo}
+      />
+
+      {/* Toast */}
       {toastMessage && (
-        <div className="fixed bottom-6 left-1/2 transform -translate-x-1/2 bg-neutral-800 text-white px-4 py-2 rounded-lg shadow-lg text-sm animate-fade z-50">
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 bg-neutral-800 text-white px-4 py-2 rounded-lg shadow-lg text-sm z-50">
           {toastMessage}
         </div>
       )}
-{/* 🔵 MODALE — Pannello Tecnico AI */}
-{showTechPanel && (
-  <AITechPanel
-    debugInfo={debugInfo}
-    onClose={() => setShowTechPanel(false)}
-  />
-)}
-
-{/* 🔵 MODALE — Costi AI */}
-{showAICostPanel && (
-  <AICostPanel
-    aiUsage={aiUsage}
-    onClose={() => setShowAICostPanel(false)}
-  />
-)}
-
-{/* 🔵 MODALE — Costi Firestore */}
-{showFirestorePanel && (
-  <FirestoreCostPanel
-    totalReads={totalReads}
-    totalWrites={totalWrites}
-    onClose={() => setShowFirestorePanel(false)}
-  />
-)}
-
-{/* ⬇️ BLOCCO 15.4 — Sidebar Orchestratore (Split + Drag) */}
-<div
-  className={`
-    fixed top-0 right-0 h-full bg-neutral-950 border-l border-neutral-800
-    z-40 transition-transform duration-200
-    ${showOrchestrator ? "translate-x-0" : "translate-x-full"}
-  `}
-  style={{
-    width: `${orchWidth}px`,
-    minWidth: "50px",
-    maxWidth: "100vw",
-  }}
->
-
-  {/* Testata con X */}
-  <div className="flex items-center justify-between px-4 py-3 border-b border-neutral-800">
-    <h2 className="text-lg font-semibold">Orchestratore</h2>
-    <button
-      onClick={() => setShowOrchestrator(false)}
-      className="text-neutral-400 hover:text-white text-xl font-bold"
-    >
-      ×
-    </button>
-  </div>
-
-  {/* Contenuto */}
-  <div className="h-full overflow-y-auto p-4">
-    <OrchestratorPanel
-      open={showOrchestrator}
-      onClose={() => setShowOrchestrator(false)}
-      data={debugInfo}
-    />
-  </div>
-
-  {/* Maniglia di drag */}
-  <div
-    className="absolute left-0 top-0 h-full w-[6px] cursor-ew-resize bg-neutral-800/30 hover:bg-neutral-700/50"
-    onMouseDown={(e) => {
-      e.preventDefault();
-      const startX = e.clientX;
-      const startWidth = orchWidth;
-
-      const onMove = (ev: MouseEvent) => {
-        const delta = startX - ev.clientX;
-        const newWidth = startWidth + delta;
-
-        // Auto-close
-        if (newWidth < 60) {
-          setShowOrchestrator(false);
-          return;
-        }
-
-        if (newWidth >= 60 && newWidth <= window.innerWidth) {
-          setOrchWidth(newWidth);
-        }
-      };
-
-      const onUp = () => {
-        window.removeEventListener("mousemove", onMove);
-        window.removeEventListener("mouseup", onUp);
-      };
-
-      window.addEventListener("mousemove", onMove);
-      window.addEventListener("mouseup", onUp);
-    }}
-  />
-</div>
-{/* ⬆️ FINE BLOCCO 15.4 */}
-
-
-// ⬆️ FINE BLOCCO 14.0 — v4.1
+    </main>
+  );
+}
+// ⬆️ FINE BLOCCO 15.0 — ChatPage v5

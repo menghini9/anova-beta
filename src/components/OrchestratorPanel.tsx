@@ -1,4 +1,4 @@
-// ⬇️ BLOCCO OP1 — OrchestratorPanel (Controllato esternamente)
+// ⬇️ BLOCCO OP1 — OrchestratorPanel (compatibile con Sidebar)
 // ANOVA_ORCHESTRATOR_V50_PANEL
 
 "use client";
@@ -17,15 +17,15 @@ export default function OrchestratorPanel({
   return (
     <div
       className={`
-        fixed top-0 right-0 h-screen w-[420px]
-        bg-black text-white overflow-y-auto
+        fixed top-0 right-0 h-screen w-full
+        bg-black/95 text-white overflow-y-auto
         transition-transform duration-300
         z-40 shadow-xl border-l border-neutral-800
         ${open ? "translate-x-0" : "translate-x-full"}
       `}
     >
       {/* HEADER */}
-      <div className="p-4 flex justify-between items-center border-b border-neutral-800">
+      <div className="p-4 flex justify-between items-center border-b border-neutral-800 bg-black">
         <h1 className="text-xl font-bold">Orchestratore</h1>
         <button
           onClick={onClose}
@@ -120,4 +120,4 @@ export default function OrchestratorPanel({
   );
 }
 
-// ⬆️ FINE BLOCCO OP1
+// ⬆️ FINE BLOCCO OP1 — OrchestratorPanel

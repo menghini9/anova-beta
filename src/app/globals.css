@@ -10,14 +10,17 @@ body {
   padding: 0;
   height: 100%;
   width: 100%;
-  background-color: #000; /* Nero puro coerente col layout */
+  background-color: #000;
   color: #f5f5f5;
   font-family: system-ui, -apple-system, sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  overflow: hidden;
-  overscroll-behavior: none; /* blocca bounce su mobile */
+
+  overflow-x: hidden;      /* ❗Blocchiamo solo l’asse orizzontale */
+  overflow-y: auto;        /* ❗Serve per permettere la chat scrollabile */
+  overscroll-behavior-y: none;
 }
+
 
 /* --- Struttura base --- */
 * {
