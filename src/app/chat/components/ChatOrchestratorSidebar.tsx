@@ -1,5 +1,5 @@
 // ⬇️ BLOCCO 15.5 — ChatOrchestratorSidebar (orchestratore a tendina)
-import OrchestratorPanel from "@/components/OrchestratorPanel";
+import OrchestratorPanel from "@/lib/orchestrator/OrchestratorPanel";
 
 type Props = {
   open: boolean;
@@ -56,9 +56,11 @@ export default function ChatOrchestratorSidebar({
       </div>
 
       {/* Maniglia drag */}
-      <div
-        className="absolute left-0 top-0 h-full w-[6px] cursor-ew-resize bg-neutral-800/30 hover:bg-neutral-700/50"
-        onMouseDown={(e) => {
+     <div
+  className="absolute left-0 top-0 h-full w-[6px] cursor-ew-resize bg-neutral-800/30 hover:bg-neutral-700/50 z-[9999]"
+  style={{ touchAction: "none", userSelect: "none" }}
+  onMouseDown={(e) => {
+
           e.preventDefault();
           const startX = e.clientX;
           const startWidth = width;

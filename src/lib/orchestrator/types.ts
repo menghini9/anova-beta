@@ -74,11 +74,13 @@ export interface OrchestrationMeta {
   clarificationUsed: boolean;
   autoPromptUsed: boolean;
 
-  // 🆕 stats per pannello tecnico AI
+  autoPromptText?: string; // 🆕 mostra il prompt arricchito
+
   stats?: {
     callsThisRequest: number;
     providersRequested: ProviderId[];
   };
 }
+
 
 // ⬆️ FINE BLOCCO 1.2

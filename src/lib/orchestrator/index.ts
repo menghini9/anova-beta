@@ -223,11 +223,14 @@ export async function getAIResponse(
 
   }
 
-  // 3️⃣ Preparazione dell’auto-prompt (prompt arricchito)
-  const intentForProviders: Intent = {
-    ...intent,
-    original: buildAutoPrompt(intent),
-  };
+ // 3️⃣ Preparazione dell’auto-prompt (prompt arricchito)
+const improvedPrompt = buildAutoPrompt(intent);
+
+const intentForProviders: Intent = {
+  ...intent,
+  original: improvedPrompt,
+};
+
 
   // 4️⃣ Chiamate parallele alle AI
   const { results: raw, stats } = await fanout(intentForProviders);
@@ -252,13 +255,15 @@ export async function getAIResponse(
   const fusion = fuse(raw);
 
   // 7️⃣ Meta per pannello tecnico
-   const meta: OrchestrationMeta = {
-    intent,
-    smallTalkHandled: false,
-    clarificationUsed: false,
-    autoPromptUsed: !!intent.autoPromptNeeded,
-    stats, // 🆕 info su chiamate e provider
-  };
+const meta: OrchestrationMeta = {
+  intent,
+  smallTalkHandled: false,
+  clarificationUsed: false,
+  autoPromptUsed: !!intent.autoPromptNeeded,
+  stats,
+  autoPromptText: improvedPrompt, // 🆕 nuovo campo
+};
+
 
   // ⬇️ BLOCCO 13.1.C — Aggiunta costo singola richiesta
 const costThisRequest = raw.reduce(
