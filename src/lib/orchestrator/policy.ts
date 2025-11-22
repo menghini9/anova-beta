@@ -12,8 +12,8 @@ export const BASE_WEIGHTS: Record<Domain, Partial<Record<ProviderId, number>>> =
 };
 
 // timeout di sicurezza per singolo provider
-export const PROVIDER_TIMEOUT_MS = 25_000;
+export const PROVIDER_TIMEOUT_MS = 55_000; // 55.000 ms
 
-// massimo numero di provider in parallelo
+// massimo numero di provider in parallelo 
 export const PARALLEL_FANOUT = 1;
 // ⬆️ FINE BLOCCO 2

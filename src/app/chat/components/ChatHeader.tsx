@@ -133,7 +133,7 @@ export default function ChatHeader(props: Props) {
           onClick={onToggleOrchestrator}
           className="px-3 py-1 text-sm border border-neutral-700 rounded-lg hover:bg-neutral-900 transition"
         >
-          {showOrchestrator ? "Chiudi Orchestratore" : "Orchestratore >"}
+          {showOrchestrator ? "Chiudi Orchestratore" : "Orchestratore ▶"}
         </button>
 
         {/* Nuova Chat */}

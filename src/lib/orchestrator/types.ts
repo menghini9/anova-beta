@@ -65,6 +65,8 @@ export interface PerformanceSample {
   ts: number;
 }
 // ⬆️ FINE BLOCCO 1.1
+
+
 // ⬇️ BLOCCO 1.2 — OrchestrationMeta (meta-informazioni per il pannello tecnico)
 // ANOVA_ORCHESTRATOR_V42_PANEL
 
@@ -73,14 +75,17 @@ export interface OrchestrationMeta {
   smallTalkHandled: boolean;
   clarificationUsed: boolean;
   autoPromptUsed: boolean;
-
-  autoPromptText?: string; // 🆕 mostra il prompt arricchito
-
   stats?: {
     callsThisRequest: number;
     providersRequested: ProviderId[];
   };
+
+  autoPromptText?: string;      // 🆕 per pannello orchestratore
+  memory?: any;                 // 🆕 snapshot mini-memoria di sessione
 }
+
+// ⬆️ FINE BLOCCO 1.2
+
 
 
 // ⬆️ FINE BLOCCO 1.2

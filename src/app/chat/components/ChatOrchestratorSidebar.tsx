@@ -41,26 +41,20 @@ export default function ChatOrchestratorSidebar({
       {/* Contenuto */}
       <div className="h-full overflow-y-auto p-4">
         {debugInfo ? (
-   <OrchestratorPanel
-  data={debugInfo}
-  open={open}
-  onClose={onClose}
-/>
-
-
+          <OrchestratorPanel data={debugInfo} />
         ) : (
           <p className="text-sm text-neutral-500">
-            Nessun dato disponibile. Invia un messaggio per vedere l&apos;analisi dell&apos;orchestratore.
+            Nessun dato disponibile. Invia un messaggio per vedere l&apos;analisi
+            dell&apos;orchestratore.
           </p>
         )}
+
       </div>
 
       {/* Maniglia drag */}
-     <div
-  className="absolute left-0 top-0 h-full w-[6px] cursor-ew-resize bg-neutral-800/30 hover:bg-neutral-700/50 z-[9999]"
-  style={{ touchAction: "none", userSelect: "none" }}
-  onMouseDown={(e) => {
-
+      <div
+        className="absolute left-0 top-0 h-full w-[6px] cursor-ew-resize bg-neutral-800/30 hover:bg-neutral-700/50"
+        onMouseDown={(e) => {
           e.preventDefault();
           const startX = e.clientX;
           const startWidth = width;

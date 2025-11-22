@@ -2,15 +2,19 @@
 
 import type { ProviderResponse } from "@/lib/orchestrator/types";
 
-export default function OrchestratorPanel({ data }: { data: any }) {
-  const autoPrompt = data?.meta?.autoPromptText || null;
+export default function OrchestratorPanel({
+  data
+}: {
+  data: any;
+}) {
 
-  // Judgement semplice (verrà sostituito da un algoritmo intelligente nella Fase 3)
+  const autoPrompt = data?.meta?.autoPromptText || null;
+  const memory = data?.memory || null;
+
   function judgeAutoPrompt(text: string | null): string {
     if (!text) return "Nessun auto-prompt generato.";
 
     const len = text.length;
-
     if (len < 80) return "⚠️ Molto corto — potrebbe risultare troppo debole.";
     if (len < 200) return "✔️ Buono — migliorato rispetto al testo originale.";
     if (len < 500) return "⭐⭐ Ottimo — struttura chiara e utile per i provider.";
@@ -19,9 +23,10 @@ export default function OrchestratorPanel({ data }: { data: any }) {
 
   return (
     <div className="space-y-6 pb-10">
+
       {/* 🧠 INTENTO */}
       <div className="bg-neutral-900 p-4 rounded border border-neutral-700">
-        <h2 className="font-semibold text-xl mb-3 text-blue-400">INTENTO</h2>
+        <h2 className="font-semibold text-xl mb-3 text-blue-400">INTENT</h2>
 
         {!data?.meta?.intent ? (
           <p className="text-neutral-500 text-sm">Nessun dato di intento.</p>
@@ -59,7 +64,52 @@ export default function OrchestratorPanel({ data }: { data: any }) {
         )}
       </div>
 
-      {/* ✨ AUTO-PROMPT GENERATO */}
+      {/* 🧠 MEMORIA DI SESSIONE */}
+      <div className="bg-neutral-900 p-3 rounded border border-neutral-700">
+       <h2 className="font-semibold text-lg mb-2 text-emerald-400">Memoria Sessione</h2>
+
+
+        {!data?.meta?.memory ? (
+          <p className="text-neutral-500 text-sm">Nessuna memoria disponibile.</p>
+        ) : (
+          <div className="space-y-2 text-sm text-neutral-200">
+            <p>
+              <span className="text-neutral-400">Obiettivi:</span>
+              <br />
+              {data.meta.memory.goals?.length
+                ? data.meta.memory.goals.join("; ")
+                : "Nessuno"}
+            </p>
+
+            <p>
+              <span className="text-neutral-400">Ultimi prompt:</span>
+              <br />
+              {data.meta.memory.lastPrompts?.length
+                ? data.meta.memory.lastPrompts.join(" | ")
+                : "Nessuno"}
+            </p>
+
+            <p>
+              <span className="text-neutral-400">Preferenze:</span>
+              <br />
+              Tono: {data.meta.memory.preferences?.tone || "–"}
+              <br />
+              Dettaglio: {data.meta.memory.preferences?.detail || "–"}
+            </p>
+
+            <p>
+              <span className="text-neutral-400">Correzioni ricevute:</span>
+              <br />
+              {data.meta.memory.corrections?.length
+                ? data.meta.memory.corrections.join(" | ")
+                : "Nessuna"}
+            </p>
+          </div>
+        )}
+      </div>
+
+
+      {/* AUTO-PROMPT */}
       {autoPrompt && (
         <div className="bg-neutral-900 p-4 rounded border border-neutral-700">
           <h2 className="font-semibold text-xl mb-4 text-yellow-400">
@@ -67,17 +117,16 @@ export default function OrchestratorPanel({ data }: { data: any }) {
           </h2>
 
           <pre className="whitespace-pre-wrap text-sm bg-neutral-950 p-4 rounded border border-neutral-800 text-neutral-200">
-{autoPrompt}
+            {autoPrompt}
           </pre>
 
-          {/* giudizio */}
           <div className="mt-3 text-sm text-neutral-400 italic">
             Valutazione: {judgeAutoPrompt(autoPrompt)}
           </div>
         </div>
       )}
 
-      {/* 🔌 ROUTING PROVIDER */}
+      {/* PROVIDER */}
       <div className="bg-neutral-900 p-4 rounded border border-neutral-700">
         <h2 className="font-semibold text-xl mb-3 text-purple-400">
           Routing Provider
@@ -141,9 +190,11 @@ export default function OrchestratorPanel({ data }: { data: any }) {
                 <p className="text-neutral-600">Nessuna risposta.</p>
               )}
             </div>
+
           </div>
         )}
       </div>
+
     </div>
   );
 }
