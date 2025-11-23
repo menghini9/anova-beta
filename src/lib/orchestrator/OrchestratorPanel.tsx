@@ -26,7 +26,7 @@ export default function OrchestratorPanel({
 
       {/* 🧠 INTENTO */}
       <div className="bg-neutral-900 p-4 rounded border border-neutral-700">
-        <h2 className="font-semibold text-xl mb-3 text-blue-400">INTENT</h2>
+        <h2 className="font-semibold text-xl mb-3 text-blue-400">Intent</h2>
 
         {!data?.meta?.intent ? (
           <p className="text-neutral-500 text-sm">Nessun dato di intento.</p>

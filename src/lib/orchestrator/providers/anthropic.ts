@@ -1,13 +1,13 @@
-// ⬇️ BLOCCO 3.1 — Anthropic Provider (Skeleton)
-// ANOVA_ORCHESTRATOR_V50_PROVIDER_ANTHROPIC
+// ⬇️ BLOCCO — Anthropic Provider (Versione Completa)
+// ANOVA_ORCHESTRATOR_V51_ANTHROPIC_PROVIDER
 
 import { invokeBase } from "./_baseProvider";
 import type { ProviderResponse } from "../types";
 import { PROVIDER_TIMEOUT_MS } from "../policy";
-import type { ProviderKey } from "../../../types/ai";
 
 export async function invokeAnthropic(prompt: string): Promise<ProviderResponse> {
   const key = process.env.ANTHROPIC_API_KEY;
+
   if (!key) {
     return {
       provider: "anthropic",
@@ -26,23 +26,60 @@ export async function invokeAnthropic(prompt: string): Promise<ProviderResponse>
     provider: "anthropic",
 
     exec: async () => {
-      // 👇 Endpoint reale verrà aggiunto successivamente
+      try {
+        const res = await fetch("https://api.anthropic.com/v1/messages", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-api-key": key,
+            "anthropic-version": "2023-06-01",
+          },
+          body: JSON.stringify({
+            model: "claude-3-haiku-20240307",
+            max_tokens: 1024,
+            messages: [{ role: "user", content: prompt }],
+          }),
+        });
+
+        if (!res.ok) {
+          return { error: `HTTP ${res.status} — ${res.statusText}` };
+        }
+
+        let json: any;
+        try {
+          json = await res.json();
+        } catch {
+          return { error: "Invalid JSON response" };
+        }
+
+        return json;
+      } catch (err: any) {
+        return { error: err?.message ?? "fetch_failed" };
+      }
+    },
+
+    parse: (raw: any) => {
+      const text =
+        raw?.content?.[0]?.text ??
+        raw?.choices?.[0]?.message?.content ??
+        "";
+
+      const usage = raw?.usage || {};
+
       return {
-        choices: [{ text: "[Anthropic non ancora collegata]" }],
-        usage: { prompt_tokens: 0, completion_tokens: 0 },
+        text,
+        promptTokens: usage.input_tokens ?? 0,
+        completionTokens: usage.output_tokens ?? 0,
       };
     },
 
-    parse: (raw: any) => ({
-      text: raw?.choices?.[0]?.text ?? "",
-      promptTokens: raw?.usage?.prompt_tokens ?? 0,
-      completionTokens: raw?.usage?.completion_tokens ?? 0,
-    }),
-
     timeoutMs: PROVIDER_TIMEOUT_MS,
 
-    cost: () => 0, // costi nulli finché non integriamo l'API reale
+    // Claude Haiku → prezzi reali
+    cost: ({ promptTokens, completionTokens }) => {
+      const promptCost = promptTokens * 0.00000025;
+      const completionCost = completionTokens * 0.00000125;
+      return promptCost + completionCost;
+    },
   });
 }
-
-// ⬆️ FINE BLOCCO 3.1

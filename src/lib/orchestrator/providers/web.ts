@@ -1,5 +1,5 @@
-// ⬇️ BLOCCO 3.5 — Web Search Provider (Skeleton)
-// ANOVA_ORCHESTRATOR_V50_PROVIDER_WEB
+// ⬇️ BLOCCO — WebSearch Provider
+// ANOVA_ORCHESTRATOR_V51_WEB_PROVIDER
 
 import { invokeBase } from "./_baseProvider";
 import type { ProviderResponse } from "../types";
@@ -7,6 +7,7 @@ import { PROVIDER_TIMEOUT_MS } from "../policy";
 
 export async function invokeWeb(prompt: string): Promise<ProviderResponse> {
   const key = process.env.WEB_SEARCH_API_KEY;
+
   if (!key) {
     return {
       provider: "web",
@@ -25,22 +26,45 @@ export async function invokeWeb(prompt: string): Promise<ProviderResponse> {
     provider: "web",
 
     exec: async () => {
-      return {
-        answer: "[Web Search non ancora collegata]",
-        usage: { prompt_tokens: 0, completion_tokens: 0 },
-      };
+      try {
+        // Il tuo eventuale motore di ricerca custom
+        const res = await fetch("https://api.example.com/search", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${key}`,
+          },
+          body: JSON.stringify({ query: prompt }),
+        });
+
+        if (!res.ok) {
+          return { error: `HTTP ${res.status} — ${res.statusText}` };
+        }
+
+        let json: any;
+        try {
+          json = await res.json();
+        } catch {
+          return { error: "Invalid JSON response" };
+        }
+
+        return json;
+      } catch (err: any) {
+        return { error: err?.message ?? "fetch_failed" };
+      }
     },
 
-    parse: (raw: any) => ({
-      text: raw?.answer ?? "",
-      promptTokens: raw?.usage?.prompt_tokens ?? 0,
-      completionTokens: raw?.usage?.completion_tokens ?? 0,
-    }),
+    parse: (raw: any) => {
+      const text = raw?.results?.[0]?.summary ?? "";
+      return {
+        text,
+        promptTokens: 0,
+        completionTokens: 0,
+      };
+    },
 
     timeoutMs: PROVIDER_TIMEOUT_MS,
 
     cost: () => 0,
   });
 }
-
-// ⬆️ FINE BLOCCO 3.5

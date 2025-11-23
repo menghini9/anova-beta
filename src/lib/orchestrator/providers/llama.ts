@@ -1,5 +1,5 @@
-// ⬇️ BLOCCO 3.4 — LLaMA Provider (Skeleton)
-// ANOVA_ORCHESTRATOR_V50_PROVIDER_LLAMA
+// ⬇️ BLOCCO — Llama Provider
+// ANOVA_ORCHESTRATOR_V51_LLAMA_PROVIDER
 
 import { invokeBase } from "./_baseProvider";
 import type { ProviderResponse } from "../types";
@@ -7,6 +7,7 @@ import { PROVIDER_TIMEOUT_MS } from "../policy";
 
 export async function invokeLlama(prompt: string): Promise<ProviderResponse> {
   const key = process.env.LLAMA_API_KEY;
+
   if (!key) {
     return {
       provider: "llama",
@@ -25,22 +26,57 @@ export async function invokeLlama(prompt: string): Promise<ProviderResponse> {
     provider: "llama",
 
     exec: async () => {
+      try {
+        const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${key}`,
+          },
+          body: JSON.stringify({
+            model: "llama3-70b-8192",
+            messages: [{ role: "user", content: prompt }],
+            temperature: 0.4,
+          }),
+        });
+
+        if (!res.ok) {
+          return { error: `HTTP ${res.status} — ${res.statusText}` };
+        }
+
+        let json: any;
+        try {
+          json = await res.json();
+        } catch {
+          return { error: "Invalid JSON response" };
+        }
+
+        return json;
+      } catch (err: any) {
+        return { error: err?.message ?? "fetch_failed" };
+      }
+    },
+
+    parse: (raw: any) => {
+      const text =
+        raw?.choices?.[0]?.message?.content ??
+        "";
+
+      const usage = raw?.usage || {};
+
       return {
-        output: "[LLAMA non ancora collegata]",
-        usage: { prompt_tokens: 0, completion_tokens: 0 },
+        text,
+        promptTokens: usage.prompt_tokens ?? 0,
+        completionTokens: usage.completion_tokens ?? 0,
       };
     },
 
-    parse: (raw: any) => ({
-      text: raw?.output ?? "",
-      promptTokens: raw?.usage?.prompt_tokens ?? 0,
-      completionTokens: raw?.usage?.completion_tokens ?? 0,
-    }),
-
     timeoutMs: PROVIDER_TIMEOUT_MS,
 
-    cost: () => 0,
+    cost: ({ promptTokens, completionTokens }) => {
+      const promptCost = promptTokens * 0.00000005;
+      const completionCost = completionTokens * 0.00000010;
+      return promptCost + completionCost;
+    },
   });
 }
-
-// ⬆️ FINE BLOCCO 3.4
