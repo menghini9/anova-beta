@@ -1,5 +1,5 @@
 // ⬇️ BLOCCO 13.1 — /src/lib/orchestrator/index.ts
-// ANOVA_ORCHESTRATOR_V50_CLEAN
+// ANOVA_ORCHESTRATOR_V60_CORE
 
 import type {
   Intent,
@@ -258,7 +258,6 @@ export function analyzeIntent(prompt: string, userId?: string): Intent {
     ]);
 
   if (!needsClarification && wordCount <= 4 && genericImperative && hasNoConcreteTopic) {
-    // es. "fammi una frase", "scrivimi qualcosa"
     needsClarification = true;
     clarificationType = "vague_goal";
   }
@@ -408,7 +407,7 @@ export async function getAIResponse(
     original: improvedPrompt,
   };
 
-  // 4️⃣ Chiamate parallele alle AI
+  // 4️⃣ Chiamate parallele alle AI (fanout con routing in base al dominio)
   const { results: raw, stats } = await fanout(intentForProviders);
 
   // 5️⃣ Log di performance
@@ -426,8 +425,8 @@ export async function getAIResponse(
       )
   );
 
-  // 6️⃣ Fusione risposte
-  const fusion = fuse(raw);
+  // 6️⃣ Fusione risposte (ora consapevole del dominio)
+  const fusion = fuse(raw, intent.purpose as any);
 
   // 7️⃣ Meta per pannello orchestratore
   const meta: OrchestrationMeta = {
@@ -454,4 +453,4 @@ export async function getAIResponse(
   };
 }
 
-// ⬆️ FINE BLOCCO 13.1 — ANOVA_ORCHESTRATOR_V50_CLEAN
+// ⬆️ FINE BLOCCO 13.1 — ANOVA_ORCHESTRATOR_V60_CORE
