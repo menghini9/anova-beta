@@ -131,16 +131,28 @@ export default function ChatPage() {
   const incRead = (n = 1) => setTotalReads((v) => v + n);
   const incWrite = (n = 1) => setTotalWrites((v) => v + n);
 
-  // Persistenza contatori
-  useEffect(() => {
-    if (!hasWindow()) return;
-    safeSet("anovaTotalReads", String(totalReads));
-  }, [totalReads]);
+// Persistenza contatori — FIX per evitare reset
+useEffect(() => {
+  if (!hasWindow()) return;
 
-  useEffect(() => {
-    if (!hasWindow()) return;
-    safeSet("anovaTotalWrites", String(totalWrites));
-  }, [totalWrites]);
+  const savedR = safeGet("anovaTotalReads");
+  const savedW = safeGet("anovaTotalWrites");
+
+  // Evito assolutamente di sovrascrivere valori esistenti al boot
+  if (savedR !== null && savedW !== null) {
+    setTotalReads(parseInt(savedR, 10) || 0);
+    setTotalWrites(parseInt(savedW, 10) || 0);
+  }
+}, []);
+
+// Salvataggio SOLO dopo il bootstrap iniziale
+useEffect(() => {
+  if (!hasWindow()) return;
+  if (totalReads === 0 && totalWrites === 0) return; // evita sovrascritture iniziali
+  safeSet("anovaTotalReads", String(totalReads));
+  safeSet("anovaTotalWrites", String(totalWrites));
+}, [totalReads, totalWrites]);
+
 
   // Persistenza uso AI
   useEffect(() => {
@@ -184,27 +196,28 @@ export default function ChatPage() {
   const activeTitleUnsubRef = useRef<null | (() => void)>(null);
   const delayedAttachTimerRef = useRef<null | number>(null);
 
-  // Listener Archivio + Cestino
-  useEffect(() => {
-    const sessionsRef = collection(db, "sessions");
-    const qAll = query(sessionsRef, orderBy("updatedAt", "desc"), limit(100));
+// Listener Archivio + Cestino (ON-DEMAND)
+useEffect(() => {
+  if (!showArchive && !showTrash) return; // 🟢 se i pannelli sono chiusi, zero read
 
-    const unsub = onSnapshot(qAll, { includeMetadataChanges: false }, (snap) => {
-      const list: SessionMeta[] = snap.docs.map((d) => ({
-        id: d.id,
-        ...(d.data() as Omit<SessionMeta, "id">),
-      }));
+  const sessionsRef = collection(db, "sessions");
+  const qAll = query(sessionsRef, orderBy("updatedAt", "desc"), limit(100));
 
-      setSessions(list.filter((s) => !s.deleted));
-      setTrashSessions(list.filter((s) => s.deleted));
+  const unsub = onSnapshot(qAll, { includeMetadataChanges: false }, (snap) => {
+    const list = snap.docs.map((d) => ({
+      id: d.id,
+      ...(d.data() as any),
+    }));
 
-      const changes = snap.docChanges().length;
-      incRead(Math.max(1, changes));
-    });
+    setSessions(list.filter((s) => !s.deleted));
+    setTrashSessions(list.filter((s) => s.deleted));
 
-    return () => unsub();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    incRead(Math.max(1, snap.docChanges().length));
+  });
+
+  return () => unsub();
+}, [showArchive, showTrash]);
+
 
   // Listener Sessione attiva (titolo + messaggi) con cache intelligente
   useEffect(() => {

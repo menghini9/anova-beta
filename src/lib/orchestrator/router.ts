@@ -1,4 +1,4 @@
-// ⬇️ BLOCCO 4 — fanout V50
+// ⬇️ BLOCCO 4 — router/fanout V50
 // ANOVA_ORCHESTRATOR_V50_FANOUT
 
 import type { ProviderResponse } from "./types";
