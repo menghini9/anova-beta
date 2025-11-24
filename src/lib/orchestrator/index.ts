@@ -11,6 +11,7 @@ import { fanout } from "./router";
 import { fuse } from "./fusion";
 import { logPerformance } from "./learn";
 import { updateSessionMemory, getSessionMemory } from "./memory/sessionMemory";
+import { mergeSessionIntoUserMemory, loadUserMemory } from "./memory/userMemory"; // <--- NEW
 
 // 🔎 Helper generico per parole chiave
 const hasAny = (text: string, list: string[]) =>
@@ -52,12 +53,16 @@ function buildClarificationQuestion(intent: Intent): string {
     "così posso modellare meglio la risposta."
   );
 }
-
 /* =========================================================
-   2) AUTO-PROMPT ENGINE v2 — SPIEGAZIONE AD ALTRE AI
+   2) AUTO-PROMPT ENGINE v2.5 — SPIEGAZIONE AD ALTRE AI
+   + Adattamento alle preferenze in memoria (sessione + utente)
    ========================================================= */
 
-function buildAutoPrompt(intent: Intent, sessionMemory?: any): string {
+function buildAutoPrompt(
+  intent: Intent,
+  sessionMemory?: any,
+  userMemory?: any
+): string {
   const userText = intent.original.trim();
 
   // Se non vogliamo arricchire (casi ultra-semplici)
@@ -72,45 +77,112 @@ function buildAutoPrompt(intent: Intent, sessionMemory?: any): string {
   else if (intent.purpose === "factual") responseType = "informazione_fattuale";
   else if (intent.purpose === "creative") responseType = "creatività_guidata";
 
-  // 2️⃣ Livello di dettaglio suggerito
-  const detailLevel =
-    intent.complexity === "high"
-      ? "molto dettagliata, strutturata e completa"
-      : intent.complexity === "medium"
-      ? "chiara e ben organizzata"
-      : "sintetica ma utile";
+  // 2️⃣ Preferenze di dettaglio e tono dalla memoria (sessione + utente)
+  let memoryDetail: "low" | "medium" | "high" | undefined = undefined;
+  let memoryTone: "concise" | "neutral" | "rich" | undefined = undefined;
+  let goals: string[] = [];
 
-  // 3️⃣ Identità di ANOVA da trasmettere alle AI
+  try {
+    if (sessionMemory && typeof sessionMemory === "object") {
+      if (Array.isArray(sessionMemory.goals)) {
+        goals = sessionMemory.goals;
+      }
+      if (sessionMemory.preferences) {
+        memoryDetail = sessionMemory.preferences.detail ?? memoryDetail;
+        memoryTone = sessionMemory.preferences.tone ?? memoryTone;
+      }
+    }
+
+    // Fallback: se la sessione non ha ancora imparato nulla, usiamo la memoria utente persistente
+    if (userMemory && typeof userMemory === "object") {
+      if (!memoryDetail && userMemory.prefs?.detail) {
+        memoryDetail = userMemory.prefs.detail;
+      }
+      if (!memoryTone && userMemory.prefs?.tone) {
+        memoryTone = userMemory.prefs.tone;
+      }
+      if (Array.isArray(userMemory.goals) && goals.length === 0) {
+        goals = userMemory.goals;
+      }
+    }
+  } catch {
+    // Non blocchiamo l'auto-prompt per problemi sulla memoria
+  }
+
+  // 3️⃣ Livello di dettaglio: memoria > intent.complexity
+  let effectiveDetail: "low" | "medium" | "high";
+
+  if (memoryDetail) {
+    effectiveDetail = memoryDetail;
+  } else {
+    // Fallback: usiamo la complessità dell'intent
+    effectiveDetail =
+      intent.complexity === "high"
+        ? "high"
+        : intent.complexity === "medium"
+        ? "medium"
+        : "low";
+  }
+
+  let detailLevelText: string;
+  if (effectiveDetail === "high") {
+    detailLevelText = "molto dettagliata, strutturata e completa";
+  } else if (effectiveDetail === "medium") {
+    detailLevelText = "chiara e ben organizzata";
+  } else {
+    detailLevelText = "sintetica ma utile";
+  }
+
+  // 4️⃣ Tono suggerito (se la memoria ha imparato qualcosa)
+  let toneInstruction = "";
+  if (memoryTone === "concise") {
+    toneInstruction =
+      "Usa un tono diretto e sintetico, senza giri di parole inutili.\n";
+  } else if (memoryTone === "rich") {
+    toneInstruction =
+      "Usa un tono ricco, con esempi e immagini mentali, mantenendo comunque chiarezza.\n";
+  } else if (memoryTone === "neutral") {
+    toneInstruction =
+      "Usa un tono professionale e neutrale, chiaro ma non eccessivamente informale.\n";
+  }
+
+  // 5️⃣ Identità di ANOVA da trasmettere alle AI
   const anovaIntro =
     "Tu sei un modello AI orchestrato da **ANOVA β**, un sistema cognitivo che coordina più intelligenze artificiali " +
     "per produrre risposte affidabili, strutturate e orientate all’obiettivo dell’utente. " +
     "ANOVA β fornisce un contesto standardizzato per migliorare la qualità della risposta.";
 
-  // 4️⃣ (Facoltativo) Aggancio alla mini-memoria locale
+  // 6️⃣ (Facoltativo) Aggancio alla mini-memoria locale
   let memorySnippet = "";
-  try {
-    if (sessionMemory && typeof sessionMemory === "object") {
-      const goals = Array.isArray(sessionMemory.goals)
-        ? sessionMemory.goals
-        : [];
-
-      if (goals.length > 0) {
-        memorySnippet +=
-          "\n\n📚 **Contesto persistente della sessione (estratto dalla memoria):**\n" +
-          `- Obiettivi ricorrenti dell’utente: ${goals.join(", ")}\n`;
-      }
-    }
-  } catch {
-    // Se qualcosa va storto con la memoria, non rompiamo l'auto-prompt.
+  if (goals.length > 0) {
+    memorySnippet +=
+      "\n\n📚 **Contesto persistente (estratto dalla memoria):**\n" +
+      `- Obiettivi ricorrenti dell’utente: ${goals.join(", ")}\n`;
   }
 
-  // 5️⃣ Template evoluto del prompt migliorato
+  if (memoryTone || memoryDetail) {
+    memorySnippet += "\n🎛 **Preferenze apprese:**\n";
+    if (memoryDetail === "high") {
+      memorySnippet += "- L’utente tende a preferire risposte più approfondite.\n";
+    } else if (memoryDetail === "low") {
+      memorySnippet += "- L’utente tende a preferire risposte più sintetiche.\n";
+    }
+    if (memoryTone === "concise") {
+      memorySnippet += "- Tono preferito: diretto e semplice.\n";
+    } else if (memoryTone === "rich") {
+      memorySnippet += "- Tono preferito: ricco e narrativo.\n";
+    } else if (memoryTone === "neutral") {
+      memorySnippet += "- Tono preferito: professionale e neutro.\n";
+    }
+  }
+
+  // 7️⃣ Template evoluto del prompt migliorato
   return (
     `${anovaIntro}\n\n` +
     `⚡ **Contesto della richiesta attuale:**\n` +
     `L’utente ha chiesto: """${userText}"""\n\n` +
     `⚙️ **Tipo di risposta richiesta:** ${responseType}\n` +
-    `📏 **Livello di dettaglio richiesto:** ${detailLevel}\n` +
+    `📏 **Livello di dettaglio richiesto:** ${detailLevelText}\n` +
     memorySnippet +
     `\n🧩 **Obiettivi per la tua risposta:**\n` +
     `1. Rispondi in modo accurato, chiaro e non prolisso.\n` +
@@ -118,9 +190,12 @@ function buildAutoPrompt(intent: Intent, sessionMemory?: any): string {
     `3. Mantieni coerenza e aderenza stretta alla richiesta.\n` +
     `4. Aggiungi note pratiche / avvertenze quando appropriate.\n` +
     `5. Evita contenuti inutili, vaghi o inventati.\n\n` +
+    (toneInstruction ? `🎙 **Tono suggerito:** ${toneInstruction}\n` : "") +
     `🎯 **Missione finale:** Produrre la versione migliore possibile della risposta che un utente esperto si aspetterebbe.\n`
   );
 }
+
+
 
 /* =========================================================
    3) SMALL TALK ENGINE — SENZA CHIAMARE LE AI ESTERNE
@@ -335,6 +410,9 @@ export async function getAIResponse(
 }> {
   const intent = analyzeIntent(prompt, userId);
 
+  // 🧠 Memoria utente persistente (se abbiamo userId)
+  const userMemory = userId ? await loadUserMemory(userId) : undefined;
+
   // 🔐 Mini-memoria di sessione (locale, lato server)
   updateSessionMemory(prompt, intent.purpose);
   const sessionMemory = getSessionMemory();
@@ -400,7 +478,8 @@ export async function getAIResponse(
   }
 
   // 3️⃣ Preparazione dell’auto-prompt (prompt arricchito per le AI esterne)
-  const improvedPrompt = buildAutoPrompt(intent, sessionMemory);
+  const improvedPrompt = buildAutoPrompt(intent, sessionMemory, userMemory);
+
 
   const intentForProviders: Intent = {
     ...intent,
@@ -444,6 +523,14 @@ export async function getAIResponse(
     (acc, r) => acc + (r.estimatedCost ?? 0),
     0
   );
+  // 9️⃣ Aggiornamento memoria utente persistente (best effort, non blocca la risposta)
+  if (userId) {
+    try {
+      await mergeSessionIntoUserMemory(userId, sessionMemory);
+    } catch (err) {
+      console.error("[ANOVA] Errore nel salvataggio della memoria utente:", err);
+    }
+  }
 
   return {
     fusion,
@@ -451,6 +538,7 @@ export async function getAIResponse(
     meta,
     costThisRequest,
   };
+
 }
 
 // ⬆️ FINE BLOCCO 13.1 — ANOVA_ORCHESTRATOR_V60_CORE

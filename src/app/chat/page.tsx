@@ -30,6 +30,18 @@ import ChatInput from "././components/ChatInput";
 import ChatSidePanels from "././components/ChatSidePanels";
 import ChatOrchestratorSidebar from "././components/ChatOrchestratorSidebar";
 
+// ⬇️ BLOCCO 1 — Setup userId locale (placeholder fino a Firebase Auth)
+// Nota: userId attuale = sessionId persistente dell’utente
+let userId: string | null = null;
+if (typeof window !== "undefined") {
+  userId = window.localStorage.getItem("anovaUserId");
+  if (!userId) {
+    userId = "user_" + Date.now().toString();
+    window.localStorage.setItem("anovaUserId", userId);
+  }
+}
+// ⬆️ FINE BLOCCO 1
+
 /* ===========================
    Tipi interni
    =========================== */
@@ -360,6 +372,7 @@ useEffect(() => {
       updatedAt: serverTimestamp(),
       lastMessage: "Sessione avviata. Pronta per lavorare insieme.",
       deleted: false,
+      owner: userId,
     });
     incWrite(2);
 
@@ -368,6 +381,7 @@ useEffect(() => {
       sender: "anova",
       text: "Sessione avviata. Pronta per lavorare insieme.",
       createdAt: serverTimestamp(),
+      owner: userId,
     });
     incWrite();
 
@@ -473,6 +487,7 @@ useEffect(() => {
       sender: "user",
       text: trimmed,
       createdAt: serverTimestamp(),
+      owner: userId
     });
     incWrite(2);
 
@@ -557,6 +572,7 @@ useEffect(() => {
       sender: "anova",
       text: aiResponse,
       createdAt: serverTimestamp(),
+      owner: userId
     });
     incWrite(2);
 
