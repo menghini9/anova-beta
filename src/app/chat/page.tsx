@@ -16,31 +16,19 @@ import {
   setDoc,
   updateDoc,
   limit,
+  where,
 } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 import type { AiUsage, ProviderKey } from "@/types/ai";
 import { EMPTY_AI_USAGE } from "@/types/ai";
-
 import AICostPanel from "@/components/panels/AICostPanel";
 import FirestoreCostPanel from "@/components/panels/FirestoreCostPanel";
-
 import ChatHeader from "././components/ChatHeader";
 import ChatMessages from "././components/ChatMessages";
 import ChatInput from "././components/ChatInput";
 import ChatSidePanels from "././components/ChatSidePanels";
 import ChatOrchestratorSidebar from "././components/ChatOrchestratorSidebar";
-
-// ⬇️ BLOCCO 1 — Setup userId locale (placeholder fino a Firebase Auth)
-// Nota: userId attuale = sessionId persistente dell’utente
-let userId: string | null = null;
-if (typeof window !== "undefined") {
-  userId = window.localStorage.getItem("anovaUserId");
-  if (!userId) {
-    userId = "user_" + Date.now().toString();
-    window.localStorage.setItem("anovaUserId", userId);
-  }
-}
-// ⬆️ FINE BLOCCO 1
+import { getUserId } from "@/lib/firebase";
 
 /* ===========================
    Tipi interni
@@ -87,6 +75,14 @@ const AI_USAGE_LS_KEY = "anovaAiUsageV1";
    Pagina Chat
    =========================== */
 export default function ChatPage() {
+  // ⬇️ BLOCCO 15.1 — Carico UID anonimo
+const [userId, setUserId] = useState<string | null>(null);
+
+useEffect(() => {
+  getUserId().then((uid) => setUserId(uid));
+}, []);
+// ⬆️ FINE BLOCCO 15.1
+
   // Messaggi e input
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
@@ -172,15 +168,18 @@ useEffect(() => {
     safeSet(AI_USAGE_LS_KEY, JSON.stringify(aiUsage));
   }, [aiUsage]);
 
-  // Bootstrap: carico contatori + creo/recupero sessione
+  // Bootstrap: contatori + creazione sessione collegata all'utente
   useEffect(() => {
     if (!hasWindow()) return;
+    if (!userId) return; // 🔒 aspetta l'UID prima di toccare Firestore
 
+    // Carico contatori salvati
     const savedR = safeGet("anovaTotalReads");
     const savedW = safeGet("anovaTotalWrites");
     if (savedR) setTotalReads(parseInt(savedR, 10) || 0);
     if (savedW) setTotalWrites(parseInt(savedW, 10) || 0);
 
+    // Gestione sessione corrente
     let sid = safeGet("anovaSessionId");
     if (!sid) {
       sid = Date.now().toString();
@@ -196,11 +195,13 @@ useEffect(() => {
         updatedAt: serverTimestamp(),
         lastMessage: "Sessione avviata.",
         deleted: false,
+        owner: userId, // 🔑 campo chiave per le regole
       },
       { merge: true }
     ).then(() => incWrite());
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [userId]);
+
 
   // Cache in-memory + riferimenti listener
   const cacheRef = useRef<SessionCache>({});
@@ -208,27 +209,40 @@ useEffect(() => {
   const activeTitleUnsubRef = useRef<null | (() => void)>(null);
   const delayedAttachTimerRef = useRef<null | number>(null);
 
-// Listener Archivio + Cestino (ON-DEMAND)
-useEffect(() => {
-  if (!showArchive && !showTrash) return; // 🟢 se i pannelli sono chiusi, zero read
+  // Listener Archivio + Cestino (ON-DEMAND, filtrato per owner)
+  useEffect(() => {
+    if (!showArchive && !showTrash) return;
+    if (!userId) return; // 🔒 niente query finché non sappiamo chi sei
 
-  const sessionsRef = collection(db, "sessions");
-  const qAll = query(sessionsRef, orderBy("updatedAt", "desc"), limit(100));
+    const sessionsRef = collection(db, "sessions");
+    const qAll = query(
+      sessionsRef,
+      // mostro solo le sessioni dell'utente corrente
+      // @ts-ignore – where verrà importato se non c'è
+      where("owner", "==", userId),
+      orderBy("updatedAt", "desc"),
+      limit(100)
+    );
 
-  const unsub = onSnapshot(qAll, { includeMetadataChanges: false }, (snap) => {
-    const list = snap.docs.map((d) => ({
-      id: d.id,
-      ...(d.data() as any),
-    }));
+    const unsub = onSnapshot(
+      qAll,
+      { includeMetadataChanges: false },
+      (snap) => {
+        const list = snap.docs.map((d) => ({
+          id: d.id,
+          ...(d.data() as any),
+        }));
 
-    setSessions(list.filter((s) => !s.deleted));
-    setTrashSessions(list.filter((s) => s.deleted));
+        setSessions(list.filter((s) => !s.deleted));
+        setTrashSessions(list.filter((s) => s.deleted));
 
-    incRead(Math.max(1, snap.docChanges().length));
-  });
+        incRead(Math.max(1, snap.docChanges().length));
+      }
+    );
 
-  return () => unsub();
-}, [showArchive, showTrash]);
+    return () => unsub();
+  }, [showArchive, showTrash, userId]);
+
 
 
   // Listener Sessione attiva (titolo + messaggi) con cache intelligente
@@ -362,6 +376,11 @@ useEffect(() => {
      =========================== */
 
   const handleNewSession = async () => {
+      if (!userId) {
+    setToastMessage("⏳ Sto inizializzando l'utente, riprova tra un attimo.");
+    setTimeout(() => setToastMessage(null), 1500);
+    return;
+  }
     const newId = Date.now().toString();
     safeSet("anovaSessionId", newId);
     setSessionId(newId);
@@ -377,12 +396,15 @@ useEffect(() => {
     incWrite(2);
 
     const messagesRef = collection(db, "sessions", newId, "messages");
-    await addDoc(messagesRef, {
-      sender: "anova",
-      text: "Sessione avviata. Pronta per lavorare insieme.",
-      createdAt: serverTimestamp(),
-      owner: userId,
-    });
+
+await addDoc(messagesRef, {
+  sender: "anova",
+  text: "Sessione avviata. Pronta per lavorare insieme.",
+  createdAt: serverTimestamp(),
+  owner: userId,
+});
+
+
     incWrite();
 
     setMessages([]);
@@ -475,12 +497,20 @@ useEffect(() => {
      Invio messaggi + orchestratore
      =========================== */
 
-  const handleSend = async (e: React.FormEvent) => {
-    e.preventDefault();
-    const trimmed = input.trim();
-    if (!trimmed || !sessionId) return;
+const handleSend = async (e: React.FormEvent) => {
+  e.preventDefault();
+  const trimmed = input.trim();
+  if (!trimmed || !sessionId) return;
 
-    const messagesRef = collection(db, "sessions", sessionId, "messages");
+  // 🧩 Controllo: utente anonimo non ancora pronto
+  if (!userId) {
+    setToastMessage("⏳ Connessione utente in corso, riprova.");
+    setTimeout(() => setToastMessage(null), 1500);
+    return;
+  }
+
+  const messagesRef = collection(db, "sessions", sessionId, "messages");
+
 
     // 1️⃣ Messaggio utente
     await addDoc(messagesRef, {
@@ -508,7 +538,8 @@ useEffect(() => {
       const res = await fetch("/api/orchestrate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ prompt: trimmed, userId: sessionId }),
+       body: JSON.stringify({ prompt: trimmed, userId }),
+
       });
 
       const data = await res.json();

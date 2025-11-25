@@ -4,6 +4,7 @@ import { initializeApp, getApps, getApp } from "firebase/app";
 import { getFirestore } from "firebase/firestore";
 import { getAuth } from "firebase/auth";
 import { getStorage } from "firebase/storage";
+import { signInAnonymously, onAuthStateChanged } from "firebase/auth";
 
 // ⚙️ Configurazione Firebase — legge le variabili dal file .env.local
 const firebaseConfig = {
@@ -25,3 +26,25 @@ export const storage = getStorage(app);    // File e contenuti
 export default app;
 
 // ⬆️ FINE BLOCCO 6.2
+// ⬇️ BLOCCO 6.3 — Login anonimo automatico
+
+let _userId: string | null = null;
+
+// Restituisce sempre l’UID valido dell’utente
+export function getUserId(): Promise<string> {
+  return new Promise((resolve) => {
+    if (_userId) return resolve(_userId);
+
+    onAuthStateChanged(auth, async (user) => {
+      if (user) {
+        _userId = user.uid;
+        return resolve(_userId);
+      } else {
+        const res = await signInAnonymously(auth);
+        _userId = res.user.uid;
+        return resolve(_userId);
+      }
+    });
+  });
+}
+// ⬆️ FINE BLOCCO 6.3
