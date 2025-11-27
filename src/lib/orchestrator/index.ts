@@ -11,7 +11,15 @@ import { fanout } from "./router";
 import { fuse } from "./fusion";
 import { logPerformance } from "./learn";
 import { updateSessionMemory, getSessionMemory } from "./memory/sessionMemory";
-import { mergeSessionIntoUserMemory, loadUserMemory } from "./memory/userMemory"; // <--- NEW
+import { 
+  loadUserMemory,
+  saveUserMemory,
+  applyMemoryToIntent,
+  mergeSessionIntoUserMemory,    // <<--- AGGIUNTO
+} from "./memory/userMemory";
+
+
+
 
 // 🔎 Helper generico per parole chiave
 const hasAny = (text: string, list: string[]) =>
