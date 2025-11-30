@@ -538,7 +538,11 @@ const handleSend = async (e: React.FormEvent) => {
       const res = await fetch("/api/orchestrate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-       body: JSON.stringify({ prompt: trimmed, userId }),
+       body: JSON.stringify({
+  prompt: trimmed,
+  sessionId,
+  userId, // <--- QUI
+}),
 
       });
 

@@ -11,15 +11,17 @@ import { fanout } from "./router";
 import { fuse } from "./fusion";
 import { logPerformance } from "./learn";
 import { updateSessionMemory, getSessionMemory } from "./memory/sessionMemory";
-import { 
+import {
   loadUserMemory,
-  saveUserMemory,
   applyMemoryToIntent,
-  mergeSessionIntoUserMemory,    // <<--- AGGIUNTO
+  mergeSessionIntoUserMemory,
 } from "./memory/userMemory";
+// 🌐 Preference Engine (V12)
+import { analyzeTextPreferences } from "@/lib/orchestrator/preference-engine/preferencesLexicon";
+import { detectUserPreferenceStatement } from "@/lib/orchestrator/preference-engine/detectPreference";
+import { buildPreferenceAck } from "@/lib/orchestrator/preference-engine/preferenceReply";
 
-
-
+// 🔤 Vocabolario preferenze (V12)
 
 // 🔎 Helper generico per parole chiave
 const hasAny = (text: string, list: string[]) =>
@@ -116,21 +118,30 @@ function buildAutoPrompt(
   } catch {
     // Non blocchiamo l'auto-prompt per problemi sulla memoria
   }
+// 🥇 PRIORITÀ MASSIMA → V12 Lexicon
+let effectiveDetail: "low" | "medium" | "high";
+if (intent.lexiconDetail) {
+  effectiveDetail = intent.lexiconDetail;
+}
+// 🥈 Secondo livello → Memoria (sessione o utente)
+else if (memoryDetail) {
+  effectiveDetail = memoryDetail;
+}
+// 🥉 Fallback → Complessità del prompt
+else {
+  effectiveDetail =
+    intent.complexity === "high"
+      ? "high"
+      : intent.complexity === "medium"
+      ? "medium"
+      : "low";
+}
 
-  // 3️⃣ Livello di dettaglio: memoria > intent.complexity
-  let effectiveDetail: "low" | "medium" | "high";
+// 🔊 Priorità per il tono
+if (intent.lexiconTone) {
+  memoryTone = intent.lexiconTone;
+}
 
-  if (memoryDetail) {
-    effectiveDetail = memoryDetail;
-  } else {
-    // Fallback: usiamo la complessità dell'intent
-    effectiveDetail =
-      intent.complexity === "high"
-        ? "high"
-        : intent.complexity === "medium"
-        ? "medium"
-        : "low";
-  }
 
   let detailLevelText: string;
   if (effectiveDetail === "high") {
@@ -192,6 +203,7 @@ function buildAutoPrompt(
     `⚙️ **Tipo di risposta richiesta:** ${responseType}\n` +
     `📏 **Livello di dettaglio richiesto:** ${detailLevelText}\n` +
     memorySnippet +
+
     `\n🧩 **Obiettivi per la tua risposta:**\n` +
     `1. Rispondi in modo accurato, chiaro e non prolisso.\n` +
     `2. Se utile, suddividi in sezioni o passi operativi.\n` +
@@ -202,8 +214,6 @@ function buildAutoPrompt(
     `🎯 **Missione finale:** Produrre la versione migliore possibile della risposta che un utente esperto si aspetterebbe.\n`
   );
 }
-
-
 
 /* =========================================================
    3) SMALL TALK ENGINE — SENZA CHIAMARE LE AI ESTERNE
@@ -233,6 +243,15 @@ function smallTalkResponse(prompt: string): string {
 
 export function analyzeIntent(prompt: string, userId?: string): Intent {
   const lower = prompt.toLowerCase().trim();
+
+  // ⬇️ V12 LEXICON — interpretazione aggettivi semplici
+const { detail: lexDetail, tone: lexTone } = analyzeTextPreferences(lower);
+const words = lower.split(/\s+/).filter(Boolean);
+
+// Assegniamo le preferenze direttamente all'intent
+let lexiconDetail: "low" | "medium" | "high" | undefined = lexDetail;
+let lexiconTone: "concise" | "neutral" | "rich" | undefined = lexTone;
+
 
   const codeHints = [
     "code",
@@ -299,8 +318,8 @@ export function analyzeIntent(prompt: string, userId?: string): Intent {
     lower.length < 120 &&
     !hasAny(lower, ["bug", "errore", "firebase", "next.js"]);
 
-  const words = lower.split(/\s+/).filter(Boolean);
   const wordCount = words.length;
+
 
   // —— Clarification Engine —— //
   let needsClarification = false;
@@ -387,20 +406,36 @@ export function analyzeIntent(prompt: string, userId?: string): Intent {
   const isSimpleQuestion =
     isQuestion && !isSmallTalk && complexity === "low" && !needsClarification;
 
-  return {
-    purpose,
-    tone: "neutral",
-    complexity,
-    keywords: [],
-    original: prompt,
-    userId,
-    mode,
-    isSmallTalk,
-    isSimpleQuestion,
-    needsClarification,
-    clarificationType,
-    autoPromptNeeded,
-  };
+ return {
+  original: prompt,
+  userId,
+
+  purpose,
+  complexity,
+
+  // 🔤 Parole del prompt già pronte (split corretto)
+  keywords: words,
+
+  // 🎛 Preferenze lessicali V12
+  lexiconDetail,
+  lexiconTone,
+
+  // 🧠 Flag intelligenti
+  isSmallTalk,
+  isSimpleQuestion,
+  needsClarification,
+  clarificationType,
+
+  // Modalità rilevata
+  mode,
+
+  // L’auto-prompt è richiesto se non è smalltalk e non è domanda semplice
+  autoPromptNeeded: !isSmallTalk && !isSimpleQuestion,
+  
+  // 🔧 tono base se la lexicon non decide diversamente
+  tone: lexiconTone ?? "neutral",
+};
+
 }
 
 /* =========================================================
@@ -424,6 +459,86 @@ export async function getAIResponse(
   // 🔐 Mini-memoria di sessione (locale, lato server)
   updateSessionMemory(prompt, intent.purpose);
   const sessionMemory = getSessionMemory();
+  
+  // 💡 Preference Engine — intercetta frasi come “preferisco risposte lunghe”
+  {
+    const prefResult = detectUserPreferenceStatement(prompt);
+
+    // Caso 1: il parser NON ha trovato nulla → si prosegue normalmente
+    if (!prefResult.preference && !prefResult.needsClarification) {
+      // non è una frase di stile, si continua con il flusso normale
+    } else if (prefResult.needsClarification && prefResult.clarificationQuestion) {
+      // Caso 2: frase ambigua → SOLO domanda di chiarimento, nessun salvataggio
+      return {
+        fusion: {
+          finalText: prefResult.clarificationQuestion,
+          fusionScore: 1,
+          used: [],
+        },
+        raw: [],
+        meta: {
+          intent,
+          smallTalkHandled: false,
+          clarificationUsed: true,
+          autoPromptUsed: false,
+          // segnaliamo che era una frase di stile ma incerta
+          preferenceDetected: false,
+          stats: { callsThisRequest: 0, providersRequested: [] },
+          memory: sessionMemory,
+        },
+        costThisRequest: 0,
+      };
+    } else if (prefResult.preference && prefResult.preference.confidence === "high") {
+      // Caso 3: preferenza chiara → salviamo e rispondiamo subito
+
+      const preferenceHit = prefResult.preference;
+
+      // 1️⃣ Aggiorniamo sessionMemory → così l'autoPrompt la usa subito
+      sessionMemory.preferences = {
+        ...(sessionMemory.preferences || {}),
+        detail: preferenceHit.detail ?? sessionMemory.preferences?.detail,
+        tone: preferenceHit.tone ?? sessionMemory.preferences?.tone,
+      };
+
+      // 2️⃣ Aggiorniamo memoria utente persistente (se loggato)
+      if (userId && preferenceHit.scope === "persistent") {
+        try {
+          const patch = {
+            prefs: {
+              detail: preferenceHit.detail,
+              tone: preferenceHit.tone,
+            },
+          };
+
+          await mergeSessionIntoUserMemory(userId, sessionMemory);
+        } catch (err) {
+          console.error("[ANOVA] Errore aggiornamento preferenze:", err);
+        }
+      }
+
+      // 3️⃣ Risposta immediata, nessun provider chiamato
+      const lastAnswerExists =
+        sessionMemory.lastPrompts && sessionMemory.lastPrompts.length > 0;
+
+      const ack = buildPreferenceAck(preferenceHit, lastAnswerExists);
+
+      return {
+        fusion: { finalText: ack, fusionScore: 1, used: [] },
+        raw: [],
+        meta: {
+          intent,
+          smallTalkHandled: false,
+          clarificationUsed: false,
+          autoPromptUsed: false,
+          preferenceDetected: true,
+          stats: { callsThisRequest: 0, providersRequested: [] },
+          memory: sessionMemory,
+        },
+        costThisRequest: 0,
+      };
+    }
+  }
+
 
   // 1️⃣ Small talk (nessuna AI esterna)
   if (intent.isSmallTalk) {
@@ -534,7 +649,17 @@ export async function getAIResponse(
   // 9️⃣ Aggiornamento memoria utente persistente (best effort, non blocca la risposta)
   if (userId) {
     try {
-      await mergeSessionIntoUserMemory(userId, sessionMemory);
+      console.log("🧩 MERGE CALL → userId:", userId);
+console.log("🧩 MERGE CALL → sessionMemory:", sessionMemory);
+
+mergeSessionIntoUserMemory(userId, {
+  prefs: sessionMemory.preferences || {},
+  corrections: sessionMemory.corrections || [],
+});
+
+
+console.log("🧩 MERGE CALL → COMPLETED");
+
     } catch (err) {
       console.error("[ANOVA] Errore nel salvataggio della memoria utente:", err);
     }

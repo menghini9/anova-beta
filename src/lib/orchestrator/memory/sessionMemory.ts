@@ -1,4 +1,4 @@
-// ⬇️ BLOCCO MEMORIA 3.0 — Memoria Interna Adattiva (ANOVA β)
+// ⬇️ BLOCCO MEMORIA 3.1 — Memoria Interna Adattiva (ANOVA β V12-ready)
 // Path: /src/lib/orchestrator/memory/sessionMemory.ts
 
 export interface PreferenceStats {
@@ -15,23 +15,21 @@ export interface PreferenceStats {
 }
 
 export interface SessionMemory {
-  goals: string[]; // Obiettivi dichiarati dall'utente (per testo intero)
+  goals: string[];
   preferences: {
-    // Preferenze "effettive" dedotte dalla sessione
     tone?: "concise" | "neutral" | "rich";
     detail?: "low" | "medium" | "high";
 
-    // Statistiche interne di apprendimento (non necessariamente mostrate in UI)
-    stats: PreferenceStats;
+    stats: PreferenceStats; // usata per segnali leggeri, non più per dedurre preferenze
   };
-  corrections: string[]; // Feedback esplicito: "non fare più così", "preferisco X"
-  domainHistory: string[]; // Storico domini (code, strategy, etc.)
-  lastPrompts: string[]; // Ultimi prompt utente (max 3)
-  messageCount: number; // Numero di messaggi visti in questa sessione
-  avgPromptLength: number; // Lunghezza media dei prompt (per capire tuo stile)
+  corrections: string[];
+  domainHistory: string[];
+  lastPrompts: string[];
+  messageCount: number;
+  avgPromptLength: number;
 }
 
-// 🔧 Configurazione base per la memoria
+// 🔧 Statistiche base (non influiscono più sui gusti dell'utente)
 const INITIAL_STATS: PreferenceStats = {
   detailWeights: {
     low: 0.33,
@@ -57,10 +55,10 @@ const INITIAL_MEMORY: SessionMemory = {
   avgPromptLength: 0,
 };
 
-// 🧩 Stato globale in-memory per la sessione corrente
+// Stato globale
 let MEMORY: SessionMemory = structuredClone(INITIAL_MEMORY);
 
-// 🧮 Helper interni
+// Helper di sicurezza
 function clamp01(v: number): number {
   if (!Number.isFinite(v)) return 0;
   if (v < 0) return 0;
@@ -82,68 +80,33 @@ function decayStats(stats: PreferenceStats, factor = 0.93): PreferenceStats {
     },
   };
 }
+// ⬇️ BLOCCO 3.2 — Analisi Testuale Preferenze (V12 Lexicon Bridge)
+// NON modifica la memoria — restituisce solo segnali
+import { analyzeTextPreferences } from "@/lib/orchestrator/preference-engine/preferencesLexicon";
+// ⬆️ FINE BLOCCO 3.2
 
-function reinforceDetail(
-  stats: PreferenceStats,
-  key: "low" | "medium" | "high",
-  amount = 0.25
-): PreferenceStats {
-  const next = { ...stats, detailWeights: { ...stats.detailWeights } };
-  next.detailWeights[key] = clamp01(next.detailWeights[key] + amount);
-  return next;
-}
-
-function reinforceTone(
-  stats: PreferenceStats,
-  key: "concise" | "neutral" | "rich",
-  amount = 0.25
-): PreferenceStats {
-  const next = { ...stats, toneWeights: { ...stats.toneWeights } };
-  next.toneWeights[key] = clamp01(next.toneWeights[key] + amount);
-  return next;
-}
-
-function pickMaxKey<T extends Record<string, number>>(
-  obj: T
-): keyof T | undefined {
-  const entries = Object.entries(obj) as [keyof T, number][];
-  if (entries.length === 0) return undefined;
-  let bestKey = entries[0][0];
-  let bestVal = entries[0][1];
-
-  for (const [k, v] of entries) {
-    if (v > bestVal) {
-      bestKey = k;
-      bestVal = v;
-    }
-  }
-
-  // Soglia minima: se tutto è troppo neutro, non imponiamo una preferenza rigida
-  if (bestVal < 0.4) return undefined;
-  return bestKey;
-}
-
-// 🧼 Reset totale (cambia sessione)
+// 🧼 Reset totale (cambi sessione)
 export function resetSessionMemory() {
   MEMORY = structuredClone(INITIAL_MEMORY);
 }
 
-// 🧠 Aggiorna la memoria ad ogni messaggio utente
+// 🧠 Aggiorna la memoria (senza più dedurre preferenze da keyword)
 export function updateSessionMemory(prompt: string, domain: string) {
   const lower = prompt.toLowerCase();
   const len = prompt.length || 0;
+let stats = MEMORY.preferences.stats;
 
-  // 0) Inizializza se manca (difesa da edge-case)
+  // Inizializzazione difensiva
   if (!MEMORY.preferences || !MEMORY.preferences.stats) {
     MEMORY.preferences = {
       stats: { ...INITIAL_STATS },
     };
   }
 
-  // Decadimento progressivo delle preferenze (se non ripeti un pattern, perde peso)
+  // Decadimento leggero delle stats (non influisce più sulle preferenze)
   MEMORY.preferences.stats = decayStats(MEMORY.preferences.stats);
 
-  // 1) Aggiorna contatore messaggi e lunghezza media
+  // 1️⃣ Contatore messaggi + lunghezza media
   MEMORY.messageCount += 1;
   MEMORY.avgPromptLength =
     MEMORY.avgPromptLength === 0
@@ -153,109 +116,41 @@ export function updateSessionMemory(prompt: string, domain: string) {
             MEMORY.messageCount
         );
 
-  // 2) Aggiorna storico domini (senza duplicati banali)
+  // 2️⃣ Storico domini
   if (domain && !MEMORY.domainHistory.includes(domain)) {
     MEMORY.domainHistory.push(domain);
   }
 
-  // 3) Aggiorna ultimi prompt (max 3)
+  // 3️⃣ Ultimi prompt (max 3)
   MEMORY.lastPrompts.push(prompt);
   if (MEMORY.lastPrompts.length > 3) {
     MEMORY.lastPrompts.shift();
   }
 
-  // 4) Estrai obiettivi espliciti (manteniamo testo intero per ora)
+  // 4️⃣ Obiettivi espliciti
   const goalHints = ["voglio", "obiettivo", "devo", "serve che", "mi serve"];
   if (goalHints.some((k) => lower.includes(k))) {
     MEMORY.goals.push(prompt);
   }
 
-  // 5) Preferenze di dettaglio esplicite + implicite
-  let stats = MEMORY.preferences.stats;
-
-  // Esplicite
-  if (
-    lower.includes("breve") ||
-    lower.includes("sintetico") ||
-    lower.includes("riassunto")
-  ) {
-    stats = reinforceDetail(stats, "low", 0.35);
-  }
-  if (
-    lower.includes("dettagliato") ||
-    lower.includes("step by step") ||
-    lower.includes("analisi profonda") ||
-    lower.includes("molto preciso")
-  ) {
-    stats = reinforceDetail(stats, "high", 0.35);
-  }
-
-  // Implicite: messaggi molto lunghi → tendenza a tollerare risposte più ricche
-  if (len > 400) {
-    stats = reinforceDetail(stats, "high", 0.1);
-  } else if (len < 120) {
-    stats = reinforceDetail(stats, "low", 0.1);
-  }
-
-  // 6) Preferenze di tono esplicite
-  if (
-    lower.includes("tono semplice") ||
-    lower.includes("spiegami facile") ||
-    lower.includes("spiegami come a un bambino")
-  ) {
-    stats = reinforceTone(stats, "concise", 0.4);
-  }
-
-  if (lower.includes("tono formale") || lower.includes("in modo professionale")) {
-    stats = reinforceTone(stats, "neutral", 0.4);
-  }
-
-  if (
-    lower.includes("tono poetico") ||
-    lower.includes("più colorato") ||
-    lower.includes("più narrativo") ||
-    lower.includes("fammi un discorso") ||
-    lower.includes("fammi un testo lungo")
-  ) {
-    stats = reinforceTone(stats, "rich", 0.4);
-  }
-
-  // 7) Estrai correzioni esplicite
+  // 5️⃣ Correzioni esplicite (non influenzano più detail/tone)
   const correctionHints = ["non fare", "non usare", "preferisco", "smetti di", "non voglio"];
   if (correctionHints.some((k) => lower.includes(k))) {
     MEMORY.corrections.push(prompt);
-
-    // Micro-regole sulle correzioni più frequenti
-    if (lower.includes("troppo lungo")) {
-      stats = reinforceDetail(stats, "low", 0.4);
-    }
-    if (lower.includes("troppo corto")) {
-      stats = reinforceDetail(stats, "high", 0.3);
-    }
-    if (lower.includes("troppo tecnico")) {
-      stats = reinforceTone(stats, "concise", 0.3);
-    }
-    if (lower.includes("troppo semplice")) {
-      stats = reinforceTone(stats, "rich", 0.3);
-    }
   }
 
-  // 8) Salva stats aggiornate
-  MEMORY.preferences.stats = stats;
-
-  // 9) Calcolo preferenze "effettive" da esporre al resto del sistema
-  const effectiveDetail = pickMaxKey(stats.detailWeights);
-  const effectiveTone = pickMaxKey(stats.toneWeights);
-
-  MEMORY.preferences.detail = effectiveDetail ?? MEMORY.preferences.detail;
-  MEMORY.preferences.tone =
-    (effectiveTone as SessionMemory["preferences"]["tone"]) ??
-    MEMORY.preferences.tone;
+  // ❗ IMPORTANTE:
+  // Da qui in poi NON deduciamo più:
+  // - detail (low/medium/high)
+  // - tone (concise/neutral/rich)
+  //
+  // Queste vengono gestite dal VOCABOLARIO V12 tramite "analyzeTextPreferences"
+  // e applicate nell'Orchestrator.
 }
 
-// 🧾 Getter pubblico
+// Getter
 export function getSessionMemory(): SessionMemory {
   return MEMORY;
 }
 
-// ⬆️ FINE BLOCCO MEMORIA 3.0 — Memoria Interna Adattiva
+// ⬆️ FINE BLOCCO MEMORIA 3.1 — Versione Pulita per Vocabolario V12

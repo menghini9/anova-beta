@@ -6,7 +6,14 @@ import { getAIResponse } from "@/lib/orchestrator";
 
 export async function POST(req: Request) {
   try {
-    const { prompt, userId } = await req.json();
+    // 1️⃣ Leggo il body della richiesta
+    const body = await req.json();
+
+    // 2️⃣ Estraggo prompt + userId
+    const { prompt, userId, sessionId } = body;
+
+    console.log("🟦 API /orchestrate — userId ricevuto:", userId);
+
 
     if (!prompt || typeof prompt !== "string") {
       return NextResponse.json(

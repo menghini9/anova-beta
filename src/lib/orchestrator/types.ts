@@ -17,6 +17,8 @@ export interface Intent {
   keywords: string[];
   original: string;         // prompt originale utente
   userId?: string;
+  lexiconDetail?: "low" | "medium" | "high";
+  lexiconTone?: "concise" | "neutral" | "rich";
 
   // 🔎 Nuovi campi intelligenti
   mode?: "chat" | "question" | "task" | "smalltalk";
@@ -80,11 +82,13 @@ export interface OrchestrationMeta {
     providersRequested: ProviderId[];
   };
 
-  autoPromptText?: string;      // 🆕 per pannello orchestratore
-  memory?: any;                 // 🆕 snapshot mini-memoria di sessione
+  autoPromptText?: string;      // per pannello orchestratore
+  memory?: any;                 // snapshot mini-memoria di sessione
+
+  // 🆕 flag: questa richiesta ha intercettato una frase di preferenza
+  preferenceDetected?: boolean;
 }
 
-// ⬆️ FINE BLOCCO 1.2
 
 
 

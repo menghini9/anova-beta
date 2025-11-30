@@ -42,10 +42,10 @@ const DEFAULT_USER_MEMORY: UserMemory = {
 
 // 🔑 Path helper: dove salviamo la memoria in Firestore
 // 🔧 FIX — Path corretto: usiamo memory_v1 (quello che esiste su Firestore)
+// 🔥 Path helper — SCRIVI MEMORIA qui
 function userMemoryDocRef(userId: string) {
   return doc(db, "users", userId, "anova_meta", "memory_v1");
 }
-
 
 // 🧵 Merge profondo molto semplice per oggetti annidati
 function deepMergeMemory(base: UserMemory, patch: Partial<UserMemory>): UserMemory {
@@ -145,6 +145,20 @@ export function applyMemoryToIntent(intent: Intent, memory?: UserMemory): Intent
     complexity = intent.complexity === "low" ? "medium" : "high";
   }
 
+  // ⬇️ V12 LEXICON — override del vocabolario
+if (intent.lexiconDetail) {
+  complexity =
+    intent.lexiconDetail === "high"
+      ? "high"
+      : intent.lexiconDetail === "medium"
+      ? "medium"
+      : "low";
+}
+
+if (intent.lexiconTone) {
+  tone = intent.lexiconTone;
+}
+
   return {
     ...intent,
     tone,
@@ -224,9 +238,11 @@ export async function mergeSessionIntoUserMemory(
       likedCount: existing.likedCount,
       lastUpdated: Date.now(),
     };
+console.log("🧠 PATCH READY TO SAVE →", JSON.stringify(patch, null, 2));
 
     // 4️⃣ Salvo tutto su Firestore (merge = true)
     const next = await saveUserMemory(userId, patch);
+console.log("🧠 FIRESTORE WRITE EXECUTED");
 
     return next;
   } catch (err) {
