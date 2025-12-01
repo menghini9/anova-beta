@@ -1,6 +1,6 @@
 "use client";
 
-// ❗ Disabilito ogni forma di prerender/SSR per la pagina
+// ❗ Disabilito ogni forma di prerender/SSR per la pagina//
 export const dynamic = "force-dynamic";
 export const fetchCache = "force-no-store";
 
@@ -721,4 +721,4 @@ const handleSend = async (e: React.FormEvent) => {
     </main>
   );
 }
-// ⬆️ FINE BLOCCO 15.0 — ChatPage v5
+// ⬆️ FINE BLOCCO 15.0 — ChatPage v5 //
