@@ -1,6 +1,9 @@
-// ⬇️ BLOCCO 2 — /src/lib/orchestrator/policy.ts
-// ANOVA_ORCHESTRATOR_V60_POLICY
+// ANOVA_ORCHESTRATOR_POLICY_V1
+// Policy centralizzata per routing, qualità e provider timeout.
 
+// ------------------------------
+// 1) PESI DI BASE PER DOMINIO
+// ------------------------------
 import type { Domain, ProviderId } from "./types";
 
 export const BASE_WEIGHTS: Record<Domain, Partial<Record<ProviderId, number>>> = {
@@ -11,10 +14,12 @@ export const BASE_WEIGHTS: Record<Domain, Partial<Record<ProviderId, number>>> =
   strategy: { openai: 0.88, anthropic: 0.86, gemini: 0.8,  mistral: 0.7,  llama: 0.6 },
 };
 
-// timeout di sicurezza per singolo provider
-export const PROVIDER_TIMEOUT_MS = 55_000; // 55.000 ms
-
-// massimo numero di provider in parallelo
-// 🔎 Nota: per lo stato attuale di ANOVA β usiamo 3 provider principali (OpenAI, Anthropic, Gemini)
+// ------------------------------
+// 2) PARAMETRI DI FANOUT
+// ------------------------------
 export const PARALLEL_FANOUT = 3;
-// ⬆️ FINE BLOCCO 2 — ANOVA_ORCHESTRATOR_V60_POLICY
+
+// ------------------------------
+// 3) TIMEOUT PER PROVIDER
+// ------------------------------
+export const PROVIDER_TIMEOUT_MS = 55_000;

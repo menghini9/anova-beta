@@ -19,8 +19,8 @@ import {
   where,
 } from "firebase/firestore";
 import { db } from "@/lib/firebase";
-import type { AiUsage, ProviderKey } from "@/types/ai";
-import { EMPTY_AI_USAGE } from "@/types/ai";
+import type { AiUsage, ProviderKey } from "@/lib/orchestrator/types/ai";
+import { EMPTY_AI_USAGE } from "@/lib/orchestrator/types/ai";
 import AICostPanel from "@/components/panels/AICostPanel";
 import FirestoreCostPanel from "@/components/panels/FirestoreCostPanel";
 import ChatHeader from "././components/ChatHeader";

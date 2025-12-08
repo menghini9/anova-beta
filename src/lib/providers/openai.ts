@@ -2,9 +2,8 @@
 // ANOVA_ORCHESTRATOR_V51_OPENAI_PROVIDER
 
 import { invokeBase } from "./_baseProvider";
-import type { ProviderResponse } from "../types";
-import type { ProviderKey } from "../../../types/ai";
-import { PROVIDER_TIMEOUT_MS } from "../policy";
+import type { ProviderResponse } from "../orchestrator/types";
+import { PROVIDER_TIMEOUT_MS } from "../orchestrator/policy";
 
 export async function invokeOpenAI(prompt: string): Promise<ProviderResponse> {
   const key = process.env.OPENAI_API_KEY;

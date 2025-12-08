@@ -2,8 +2,8 @@
 // ANOVA_ORCHESTRATOR_V50_PROVIDER_BASE
 
 import { withTimeout } from "./_base";
-import type { ProviderResponse } from "../types";
-import type { ProviderKey } from "../../../types/ai";
+import type { ProviderResponse } from "../orchestrator/types";
+import type { ProviderKey } from "../orchestrator/types/ai";
 
 
 interface BaseInvokeConfig {

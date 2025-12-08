@@ -1,19 +1,19 @@
-// ⬇️ BLOCCO — Llama Provider
-// ANOVA_ORCHESTRATOR_V51_LLAMA_PROVIDER
+// ⬇️ BLOCCO — Mistral Provider
+// ANOVA_ORCHESTRATOR_V51_MISTRAL_PROVIDER
 
 import { invokeBase } from "./_baseProvider";
-import type { ProviderResponse } from "../types";
-import { PROVIDER_TIMEOUT_MS } from "../policy";
+import type { ProviderResponse } from "../orchestrator/types";
+import { PROVIDER_TIMEOUT_MS } from "../orchestrator/policy";
 
-export async function invokeLlama(prompt: string): Promise<ProviderResponse> {
-  const key = process.env.LLAMA_API_KEY;
+export async function invokeMistral(prompt: string): Promise<ProviderResponse> {
+  const key = process.env.MISTRAL_API_KEY;
 
   if (!key) {
     return {
-      provider: "llama",
+      provider: "mistral",
       text: "",
       success: false,
-      error: "LLAMA_API_KEY missing",
+      error: "MISTRAL_API_KEY missing",
       latencyMs: 0,
       tokensUsed: 0,
       promptTokens: 0,
@@ -23,20 +23,19 @@ export async function invokeLlama(prompt: string): Promise<ProviderResponse> {
   }
 
   return invokeBase({
-    provider: "llama",
+    provider: "mistral",
 
     exec: async () => {
       try {
-        const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+        const res = await fetch("https://api.mistral.ai/v1/chat/completions", {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
             Authorization: `Bearer ${key}`,
           },
           body: JSON.stringify({
-            model: "llama3-70b-8192",
+            model: "mistral-small-latest",
             messages: [{ role: "user", content: prompt }],
-            temperature: 0.4,
           }),
         });
 
@@ -74,8 +73,8 @@ export async function invokeLlama(prompt: string): Promise<ProviderResponse> {
     timeoutMs: PROVIDER_TIMEOUT_MS,
 
     cost: ({ promptTokens, completionTokens }) => {
-      const promptCost = promptTokens * 0.00000005;
-      const completionCost = completionTokens * 0.00000010;
+      const promptCost = promptTokens * 0.00000020;
+      const completionCost = completionTokens * 0.00000060;
       return promptCost + completionCost;
     },
   });

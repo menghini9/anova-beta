@@ -1,7 +1,7 @@
 // ⬇️ BLOCCO PROVIDER RESPONSE — providers.ts
 // ANOVA_ORCHESTRATOR_V50_PROVIDER_STANDARD
 
-import type { ProviderKey } from "@/types/ai";
+import type { ProviderKey } from "@/lib/orchestrator/types/ai";
 
 export interface ProviderResponse {
   provider: ProviderKey;       // "openai" | "anthropic" | ...

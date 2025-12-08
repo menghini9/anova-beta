@@ -1,19 +1,19 @@
-// ⬇️ BLOCCO — Anthropic Provider (Versione Completa)
-// ANOVA_ORCHESTRATOR_V51_ANTHROPIC_PROVIDER
+// ⬇️ BLOCCO — Llama Provider
+// ANOVA_ORCHESTRATOR_V51_LLAMA_PROVIDER
 
 import { invokeBase } from "./_baseProvider";
-import type { ProviderResponse } from "../types";
-import { PROVIDER_TIMEOUT_MS } from "../policy";
+import type { ProviderResponse } from "../orchestrator/types";
+import { PROVIDER_TIMEOUT_MS } from "../orchestrator/policy";
 
-export async function invokeAnthropic(prompt: string): Promise<ProviderResponse> {
-  const key = process.env.ANTHROPIC_API_KEY;
+export async function invokeLlama(prompt: string): Promise<ProviderResponse> {
+  const key = process.env.LLAMA_API_KEY;
 
   if (!key) {
     return {
-      provider: "anthropic",
+      provider: "llama",
       text: "",
       success: false,
-      error: "ANTHROPIC_API_KEY missing",
+      error: "LLAMA_API_KEY missing",
       latencyMs: 0,
       tokensUsed: 0,
       promptTokens: 0,
@@ -23,21 +23,20 @@ export async function invokeAnthropic(prompt: string): Promise<ProviderResponse>
   }
 
   return invokeBase({
-    provider: "anthropic",
+    provider: "llama",
 
     exec: async () => {
       try {
-        const res = await fetch("https://api.anthropic.com/v1/messages", {
+        const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            "x-api-key": key,
-            "anthropic-version": "2023-06-01",
+            Authorization: `Bearer ${key}`,
           },
           body: JSON.stringify({
-            model: "claude-3-haiku-20240307",
-            max_tokens: 1024,
+            model: "llama3-70b-8192",
             messages: [{ role: "user", content: prompt }],
+            temperature: 0.4,
           }),
         });
 
@@ -60,7 +59,6 @@ export async function invokeAnthropic(prompt: string): Promise<ProviderResponse>
 
     parse: (raw: any) => {
       const text =
-        raw?.content?.[0]?.text ??
         raw?.choices?.[0]?.message?.content ??
         "";
 
@@ -68,17 +66,16 @@ export async function invokeAnthropic(prompt: string): Promise<ProviderResponse>
 
       return {
         text,
-        promptTokens: usage.input_tokens ?? 0,
-        completionTokens: usage.output_tokens ?? 0,
+        promptTokens: usage.prompt_tokens ?? 0,
+        completionTokens: usage.completion_tokens ?? 0,
       };
     },
 
     timeoutMs: PROVIDER_TIMEOUT_MS,
 
-    // Claude Haiku → prezzi reali
     cost: ({ promptTokens, completionTokens }) => {
-      const promptCost = promptTokens * 0.00000025;
-      const completionCost = completionTokens * 0.00000125;
+      const promptCost = promptTokens * 0.00000005;
+      const completionCost = completionTokens * 0.00000010;
       return promptCost + completionCost;
     },
   });

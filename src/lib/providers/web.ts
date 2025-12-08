@@ -2,8 +2,8 @@
 // ANOVA_ORCHESTRATOR_V51_WEB_PROVIDER
 
 import { invokeBase } from "./_baseProvider";
-import type { ProviderResponse } from "../types";
-import { PROVIDER_TIMEOUT_MS } from "../policy";
+import type { ProviderResponse } from "../orchestrator/types";
+import { PROVIDER_TIMEOUT_MS } from "../orchestrator/policy";
 
 export async function invokeWeb(prompt: string): Promise<ProviderResponse> {
   const key = process.env.WEB_SEARCH_API_KEY;

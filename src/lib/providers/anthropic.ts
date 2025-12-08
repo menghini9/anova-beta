@@ -1,19 +1,19 @@
-// ⬇️ BLOCCO — Mistral Provider
-// ANOVA_ORCHESTRATOR_V51_MISTRAL_PROVIDER
+// ⬇️ BLOCCO — Anthropic Provider (Versione Completa)
+// ANOVA_ORCHESTRATOR_V51_ANTHROPIC_PROVIDER
 
 import { invokeBase } from "./_baseProvider";
-import type { ProviderResponse } from "../types";
-import { PROVIDER_TIMEOUT_MS } from "../policy";
+import type { ProviderResponse } from "../orchestrator/types";
+import { PROVIDER_TIMEOUT_MS } from "../orchestrator/policy";
 
-export async function invokeMistral(prompt: string): Promise<ProviderResponse> {
-  const key = process.env.MISTRAL_API_KEY;
+export async function invokeAnthropic(prompt: string): Promise<ProviderResponse> {
+  const key = process.env.ANTHROPIC_API_KEY;
 
   if (!key) {
     return {
-      provider: "mistral",
+      provider: "anthropic",
       text: "",
       success: false,
-      error: "MISTRAL_API_KEY missing",
+      error: "ANTHROPIC_API_KEY missing",
       latencyMs: 0,
       tokensUsed: 0,
       promptTokens: 0,
@@ -23,18 +23,20 @@ export async function invokeMistral(prompt: string): Promise<ProviderResponse> {
   }
 
   return invokeBase({
-    provider: "mistral",
+    provider: "anthropic",
 
     exec: async () => {
       try {
-        const res = await fetch("https://api.mistral.ai/v1/chat/completions", {
+        const res = await fetch("https://api.anthropic.com/v1/messages", {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            Authorization: `Bearer ${key}`,
+            "x-api-key": key,
+            "anthropic-version": "2023-06-01",
           },
           body: JSON.stringify({
-            model: "mistral-small-latest",
+            model: "claude-3-haiku-20240307",
+            max_tokens: 1024,
             messages: [{ role: "user", content: prompt }],
           }),
         });
@@ -58,6 +60,7 @@ export async function invokeMistral(prompt: string): Promise<ProviderResponse> {
 
     parse: (raw: any) => {
       const text =
+        raw?.content?.[0]?.text ??
         raw?.choices?.[0]?.message?.content ??
         "";
 
@@ -65,16 +68,17 @@ export async function invokeMistral(prompt: string): Promise<ProviderResponse> {
 
       return {
         text,
-        promptTokens: usage.prompt_tokens ?? 0,
-        completionTokens: usage.completion_tokens ?? 0,
+        promptTokens: usage.input_tokens ?? 0,
+        completionTokens: usage.output_tokens ?? 0,
       };
     },
 
     timeoutMs: PROVIDER_TIMEOUT_MS,
 
+    // Claude Haiku → prezzi reali
     cost: ({ promptTokens, completionTokens }) => {
-      const promptCost = promptTokens * 0.00000020;
-      const completionCost = completionTokens * 0.00000060;
+      const promptCost = promptTokens * 0.00000025;
+      const completionCost = completionTokens * 0.00000125;
       return promptCost + completionCost;
     },
   });
