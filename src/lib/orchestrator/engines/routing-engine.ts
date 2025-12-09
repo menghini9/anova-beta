@@ -1,27 +1,25 @@
-// ANOVA_ROUTING_ENGINE_V1
-// Motore di routing cognitivo: sceglie quali provider interrogare.
-// Usa: quantum-model, policy, performance-map (in futuro), availability API key.
+// ANOVA_ROUTING_ENGINE_V2
+// Motore di routing cognitivo con profili di costo (Economy / Balanced / Premium)
 
 import type { ProviderId, Intent } from "../types";
 import type { QuantumState } from "../quantum/quantum-model";
-import { BASE_WEIGHTS, PARALLEL_FANOUT, PROVIDER_TIMEOUT_MS } 
-  from "../policy";
 
+import { BASE_WEIGHTS } from "../policy";
+import { COST_PROFILES, getUserCostProfile } from "./cost-profile";
 
+/* -------------------------------------------------------
+ * TIPI
+ * ------------------------------------------------------- */
 
-
-/**
- * Descrive quali provider chiamare e con che peso.
- */
 export interface RoutingDecision {
   selected: ProviderId[];
   ranked: Array<{ provider: ProviderId; weight: number }>;
   fanoutCount: number;
 }
 
-/**
- * Provider registrati — in futuro sarà dinamico.
- */
+/* -------------------------------------------------------
+ * PROVIDER REGISTRATI
+ * ------------------------------------------------------- */
 const ALL_PROVIDERS: ProviderId[] = [
   "openai",
   "anthropic",
@@ -31,9 +29,9 @@ const ALL_PROVIDERS: ProviderId[] = [
   "web",
 ];
 
-/**
- * Verifica presenza API key.
- */
+/* -------------------------------------------------------
+ * API KEY CHECK
+ * ------------------------------------------------------- */
 function providerAvailable(id: ProviderId): boolean {
   const keyMap: Record<ProviderId, string | undefined> = {
     openai: process.env.OPENAI_API_KEY,
@@ -43,13 +41,12 @@ function providerAvailable(id: ProviderId): boolean {
     llama: process.env.LLAMA_API_KEY,
     web: process.env.WEB_SEARCH_API_KEY,
   };
-  const key = keyMap[id];
-  return Boolean(key && key !== "");
+  return Boolean(keyMap[id]);
 }
 
-/**
- * Combina i pesi della policy + le probabilità quantiche.
- */
+/* -------------------------------------------------------
+ * QUANTUM + POLICY COMBINATI
+ * ------------------------------------------------------- */
 function computeQuantumWeightedScores(
   quantum: QuantumState
 ): Record<ProviderId, number> {
@@ -67,51 +64,87 @@ function computeQuantumWeightedScores(
     const domainWeights = BASE_WEIGHTS[domain] || {};
 
     for (const provider of ALL_PROVIDERS) {
-      const w = (domainWeights[provider] as number | undefined) ?? 0.5;
-      scores[provider] += w * interp.probability;
+      const baseline = (domainWeights[provider] as number | undefined) ?? 0.5;
+      scores[provider] += baseline * interp.probability;
     }
   }
 
   return scores;
 }
 
-/**
- * Motore centrale: decide quali provider chiamare.
- */
-export function runRoutingEngine(
-  intent: Intent,
-  quantum: QuantumState
-): RoutingDecision {
-  // 1) Pesi combinati (policy + quantum)
-  const quantumScores = computeQuantumWeightedScores(quantum);
+/* -------------------------------------------------------
+ * COST ENGINE – aggiunge correzione peso in base al profilo
+ * ------------------------------------------------------- */
+function applyCostProfileWeights(
+  rawScores: Record<ProviderId, number>,
+  profile: ReturnType<typeof getUserCostProfile>
+) {
+  const { allowed, qualityBoost, costPenalty } = COST_PROFILES[profile];
 
-  // 2) Consideriamo solo provider attivi (con API key)
-  const available = ALL_PROVIDERS.filter((p) => providerAvailable(p));
+  const finalScores: Record<ProviderId, number> = { ...rawScores };
 
-  if (available.length === 0) {
-    return {
-      selected: [],
-      ranked: [],
-      fanoutCount: 0,
-    };
+  for (const prov of Object.keys(finalScores) as ProviderId[]) {
+    // Se non è in allowed → peso zero
+    if (!allowed.includes(prov)) {
+      finalScores[prov] = 0;
+      continue;
+    }
+
+    // Formula peso modificato
+    const score = rawScores[prov];
+    const adjusted =
+      score * qualityBoost - score * costPenalty * 0.2; // 20% penalità costo
+    finalScores[prov] = Math.max(0, adjusted);
   }
 
-  // 3) Ranking provider con pesi quantici
+  return finalScores;
+}
+
+/* -------------------------------------------------------
+ * MOTORE CENTRALE DI ROUTING
+ * ------------------------------------------------------- */
+export function runRoutingEngine(
+  intent: Intent,
+  quantum: QuantumState,
+  userId?: string
+): RoutingDecision {
+  const profile = getUserCostProfile(userId);
+
+  // 1) Quantum + policy
+  const qScores = computeQuantumWeightedScores(quantum);
+
+  // 2) Cost profiling
+  const profileScores = applyCostProfileWeights(qScores, profile);
+
+  // 3) Filtra provider davvero disponibili
+  const available = (Object.keys(profileScores) as ProviderId[])
+    .filter((p) => providerAvailable(p))
+    .filter((p) => profileScores[p] > 0);
+
+  if (available.length === 0) {
+    return { selected: [], ranked: [], fanoutCount: 0 };
+  }
+
+  // 4) Ranking finale
   const ranked = available
     .map((p) => ({
       provider: p,
-      weight: Number(quantumScores[p].toFixed(3)),
+      weight: Number(profileScores[p].toFixed(3)),
     }))
     .sort((a, b) => b.weight - a.weight);
 
-  // 4) Numero massimo di provider in fanout
-  const fanout = Math.min(PARALLEL_FANOUT ?? 3, ranked.length);
-
-  // 5) Provider selezionati per fanout finale
-  const selected = ranked.slice(0, fanout).map((r) => r.provider);
+  // 5) Fanout basato sul profilo
+  const maxFanout = COST_PROFILES[profile].maxFanout;
+  const fanout = Math.min(maxFanout, ranked.length);
+console.log("ROUTING_DEBUG", {
+  available: available,
+  qScores,
+  profileScores,
+  apiKeys: ALL_PROVIDERS.map(p => [p, providerAvailable(p)])
+});
 
   return {
-    selected,
+    selected: ranked.slice(0, fanout).map((r) => r.provider),
     ranked,
     fanoutCount: fanout,
   };

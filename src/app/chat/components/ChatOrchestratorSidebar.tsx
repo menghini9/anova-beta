@@ -16,6 +16,8 @@ export default function ChatOrchestratorSidebar({
   onClose,
   debugInfo,
 }: Props) {
+  const meta = debugInfo?.meta ?? null;
+
   return (
     <div
       className={`fixed top-0 right-0 h-full bg-neutral-950 border-l border-neutral-800
@@ -49,6 +51,39 @@ export default function ChatOrchestratorSidebar({
           </p>
         )}
 
+        {/* ========================= */}
+        {/* 🔶 FUSION SCORE PANEL     */}
+        {/* ========================= */}
+        {meta && meta.fusionDebug && (
+          <div className="p-4 rounded-lg bg-neutral-900 mt-6">
+            <h2 className="text-yellow-400 text-xl font-bold mb-2">
+              Fusion Score
+            </h2>
+
+            <p className="text-sm text-neutral-300">
+              <strong>Punteggio:</strong> {meta.fusionDebug.score ?? "-"}
+            </p>
+
+            <p className="text-sm text-neutral-300 mt-1">
+              <strong>Provider usati:</strong>{" "}
+              {(meta.fusionDebug.usedProviders ?? []).join(", ") || "-"}
+            </p>
+
+            <p className="text-sm text-neutral-300 mt-1">
+              <strong>Provider scartati:</strong>{" "}
+              {(meta.fusionDebug.discardedProviders ?? []).join(", ") || "-"}
+            </p>
+
+            <p className="text-sm text-neutral-300 mt-1">
+              <strong>Dominio stimato:</strong>{" "}
+              {meta.fusionDebug.domain ?? "-"}
+            </p>
+
+            <p className="text-sm text-neutral-400 mt-2 italic">
+              {meta.fusionDebug.finalTextPreview}
+            </p>
+          </div>
+        )}
       </div>
 
       {/* Maniglia drag */}

@@ -290,6 +290,14 @@ export async function getAIResponse(
     sessionMemory,
     userMemory,
   });
+// ================================
+// 🔍 DEBUG LOG — Prompt Injected
+// Mostra il super-prompt finale (solo in sviluppo)
+// ================================
+if (process.env.NODE_ENV === "development") {
+  console.log("🔧 [ANOVA_DEBUG] Super-prompt generato:");
+  console.log(improvedPrompt);
+}
 
   // 9️⃣ Routing Engine → scelta provider
   const routingDecision = runRoutingEngine(intent, quantum);
@@ -325,6 +333,21 @@ export async function getAIResponse(
   // 1️⃣1️⃣ Fusione risposte
   const { fusion } = runFusionEngine(raw, finalDomain);
 
+  // ================================
+// 🔍 Fusion Debug Info (sviluppo)
+// ================================
+// 🧠 Fusion Debug per pannello tecnico
+const fusionDebug = {
+  score: fusion.fusionScore,
+  usedProviders: fusion.used.map(u => u.provider),     // ← string[]
+  discardedProviders: routingDecision.selected
+    .filter(p => !fusion.used.map(u => u.provider).includes(p)),  // ← string[]
+  domain: finalDomain,
+  finalTextPreview: fusion.finalText.slice(0, 200) + "…",
+};
+
+
+
   // 1️⃣2️⃣ Costo totale richiesta
   const costThisRequest = raw.reduce(
     (acc, r) => acc + (r.estimatedCost ?? 0),
@@ -337,19 +360,21 @@ export async function getAIResponse(
   }
 
   // 1️⃣4️⃣ Meta per pannello orchestratore
-  const meta: OrchestrationMeta = {
-    intent,
-    smallTalkHandled: false,
-    clarificationUsed: false,
-    autoPromptUsed: !!intent.autoPromptNeeded,
-    stats: {
-      callsThisRequest: raw.length,
-      providersRequested: routingDecision.selected,
-    },
-    autoPromptText: improvedPrompt,
-    memory: sessionMemory,
-    preferenceDetected: false,
-  };
+const meta: OrchestrationMeta = {
+  intent,
+  smallTalkHandled: false,
+  clarificationUsed: false,
+  autoPromptUsed: !!intent.autoPromptNeeded,
+  stats: {
+    callsThisRequest: raw.length,
+    providersRequested: routingDecision.selected,
+  },
+  autoPromptText: improvedPrompt,
+  memory: sessionMemory,
+  preferenceDetected: false,
+  fusionDebug,          // ← ora è valido
+};
+
 
   return {
     fusion,

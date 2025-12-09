@@ -1,8 +1,23 @@
-// ⬇️ BLOCCO 1.1 — /src/lib/orchestrator/types.ts (Intent esteso)
-// ANOVA_ORCHESTRATOR_V42_INTENT
+// ======================================================
+// ANOVA_ORCHESTRATOR_TYPES_V50
+// Tipi unificati e aggiornati per Intent, Provider, Fusion,
+// Meta, Memoria e Debug.
+// ======================================================
 
-export type ProviderId = "openai" | "anthropic" | "gemini" | "mistral" | "llama" | "web";
+// ------------------------------------------------------
+// PROVIDER
+// ------------------------------------------------------
+export type ProviderId =
+  | "openai"
+  | "anthropic"
+  | "gemini"
+  | "mistral"
+  | "llama"
+  | "web";
 
+// ------------------------------------------------------
+// DOMAINI
+// ------------------------------------------------------
 export type Domain =
   | "logic"
   | "code"
@@ -10,25 +25,31 @@ export type Domain =
   | "factual"
   | "strategy";
 
+// ------------------------------------------------------
+// INTENT (esteso e modernizzato)
+// ------------------------------------------------------
 export interface Intent {
-  purpose: Domain;          // es. "code"
+  purpose: Domain;
   tone: "concise" | "neutral" | "rich";
   complexity: "low" | "medium" | "high";
   keywords: string[];
-  original: string;         // prompt originale utente
+  original: string;
   userId?: string;
+
   lexiconDetail?: "low" | "medium" | "high";
   lexiconTone?: "concise" | "neutral" | "rich";
 
-  // 🔎 Nuovi campi intelligenti
   mode?: "chat" | "question" | "task" | "smalltalk";
-  isSmallTalk?: boolean;        // es. "ciao", "come stai"
-  isSimpleQuestion?: boolean;   // domanda semplice, oggettiva
-  needsClarification?: boolean; // richiesta ambigua (serve domanda in più)
+  isSmallTalk?: boolean;
+  isSimpleQuestion?: boolean;
+  needsClarification?: boolean;
   clarificationType?: "anova_ambiguous" | "vague_goal" | "generic";
-  autoPromptNeeded?: boolean;   // conviene migliorare il prompt prima di interrogare le AI
+  autoPromptNeeded?: boolean;
 }
 
+// ------------------------------------------------------
+// PROVIDER RESPONSE (standardizzato)
+// ------------------------------------------------------
 export interface ProviderResponse {
   provider: ProviderId;
   text: string;
@@ -36,20 +57,31 @@ export interface ProviderResponse {
   success: boolean;
   error?: string;
 
-  // 🆕 Tracking costi / token (opzionali, non rompono gli altri provider)
+  // opzioni per costi/token
   tokensUsed?: number;
   estimatedCost?: number;
   promptTokens?: number;
   completionTokens?: number;
 }
 
-
+// ------------------------------------------------------
+// FUSION RESULT (risultato della fusione AI)
+// ------------------------------------------------------
 export interface FusionResult {
   finalText: string;
-  fusionScore: number;      // 0..1
-  used: Array<{ provider: ProviderId; score: number; latencyMs: number }>;
+  fusionScore: number; // 0..1
+
+  // elenco provider usati con punteggi → richiesto dal pannello Fusion
+  used: Array<{
+    provider: ProviderId;
+    score: number;
+    latencyMs: number;
+  }>;
 }
 
+// ------------------------------------------------------
+// USER PROFILE (preferenze persistenti)
+// ------------------------------------------------------
 export interface UserProfile {
   userId: string;
   prefs?: {
@@ -59,37 +91,53 @@ export interface UserProfile {
   };
 }
 
+// ------------------------------------------------------
+// PERFORMANCE SAMPLES (per il futuro performance map)
+// ------------------------------------------------------
 export interface PerformanceSample {
   provider: ProviderId;
   domain: Domain;
   score: number;      // 0..1
   latencyMs: number;
-  ts: number;
+  ts: number;         // timestamp
 }
-// ⬆️ FINE BLOCCO 1.1
 
+// ------------------------------------------------------
+// FUSION DEBUG (nuovo formato semplificato + coerente con UI)
+// ------------------------------------------------------
+export interface FusionDebug {
+  score: number;              // punteggio finale fusione
+  usedProviders: string[];    // provider utilizzati
+  discardedProviders: string[]; // provider scartati
+  domain: string;             // dominio finale scelto
+  finalTextPreview: string;   // anteprima testo fuso
+}
 
-// ⬇️ BLOCCO 1.2 — OrchestrationMeta (meta-informazioni per il pannello tecnico)
-// ANOVA_ORCHESTRATOR_V42_PANEL
-
+// ------------------------------------------------------
+// ORCHESTRATION META (meta pannello tecnico)
+// ------------------------------------------------------
 export interface OrchestrationMeta {
   intent: Intent;
+
   smallTalkHandled: boolean;
   clarificationUsed: boolean;
   autoPromptUsed: boolean;
+
   stats?: {
     callsThisRequest: number;
     providersRequested: ProviderId[];
   };
 
-  autoPromptText?: string;      // per pannello orchestratore
-  memory?: any;                 // snapshot mini-memoria di sessione
+  // pannello Fusion
+  fusionDebug?: FusionDebug;
 
-  // 🆕 flag: questa richiesta ha intercettato una frase di preferenza
+  autoPromptText?: string;
+  memory?: any;
+
+  // preferenze utente intercettate a runtime
   preferenceDetected?: boolean;
 }
 
-
-
-
-// ⬆️ FINE BLOCCO 1.2
+// ======================================================
+// FINE TYPES V50
+// ======================================================
