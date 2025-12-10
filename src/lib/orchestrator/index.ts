@@ -49,12 +49,27 @@ import { buildPreferenceAck } from "./preference-engine/preferenceReply";
 // =========================
 // 5) PROVIDER REALI
 // =========================
-import { invokeOpenAI } from "@/lib/providers/openai";
-import { invokeAnthropic } from "@/lib/providers/anthropic";
-import { invokeGemini } from "@/lib/providers/gemini";
-import { invokeMistral } from "@/lib/providers/mistral";
-import { invokeLlama } from "@/lib/providers/llama";
-import { invokeWeb } from "@/lib/providers/web";
+// OPENAI
+import {
+  invokeOpenAIEconomic,
+  invokeOpenAIBalanced,
+  invokeOpenAIPremium
+} from "../providers/openai";
+
+// ANTHROPIC
+import {
+  invokeAnthropicEconomic,
+  invokeAnthropicBalanced,
+  invokeAnthropicPremium
+} from "../providers/anthropic";
+
+// GEMINI
+import {
+  invokeGeminiEconomic,
+  invokeGeminiBalanced,
+  invokeGeminiPremium
+} from "../providers/gemini";
+
 
 // =========================
 // 1) EXECUTOR PROVIDER
@@ -69,28 +84,44 @@ async function executeProviders(
   const calls: Promise<ProviderResponse>[] = [];
 
   for (const p of providers) {
-    switch (p) {
-      case "openai":
-        calls.push(invokeOpenAI(prompt));
-        break;
-      case "anthropic":
-        calls.push(invokeAnthropic(prompt));
-        break;
-      case "gemini":
-        calls.push(invokeGemini(prompt));
-        break;
-      case "mistral":
-        calls.push(invokeMistral(prompt));
-        break;
-      case "llama":
-        calls.push(invokeLlama(prompt));
-        break;
-      case "web":
-        calls.push(invokeWeb(prompt));
-        break;
-      default:
-        break;
-    }
+switch (p) {
+  case "openai:econ":
+    calls.push(invokeOpenAIEconomic(prompt));
+    break;
+
+  case "openai:mid":
+    calls.push(invokeOpenAIBalanced(prompt));
+    break;
+
+  case "openai:max":
+    calls.push(invokeOpenAIPremium(prompt));
+    break;
+
+  case "anthropic:econ":
+    calls.push(invokeAnthropicEconomic(prompt));
+    break;
+
+  case "anthropic:mid":
+    calls.push(invokeAnthropicBalanced(prompt));
+    break;
+
+  case "anthropic:max":
+    calls.push(invokeAnthropicPremium(prompt));
+    break;
+
+  case "gemini:econ":
+    calls.push(invokeGeminiEconomic(prompt));
+    break;
+
+  case "gemini:mid":
+    calls.push(invokeGeminiBalanced(prompt));
+    break;
+
+  case "gemini:max":
+    calls.push(invokeGeminiPremium(prompt));
+    break;
+  }
+
   }
 
   const results = await Promise.all(

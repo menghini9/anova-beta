@@ -1,8 +1,9 @@
 // ANOVA_QUALITY_ENGINE_V1
 // Motore di valutazione qualità delle risposte dei provider.
 
-import type { ProviderResponse, Domain, ProviderId } from "../types";
+import type { ProviderResponse} from "../types";
 import { BASE_WEIGHTS } from "../policy";
+import type { ProviderId, CoreProviderId, Domain } from "../types";
 
 /* ------------------------------------------
  * TIPI ESPORTATI
@@ -82,9 +83,15 @@ export function runQualityEngine(
     }
 
     const quality = contentScore(r.text);
-    const providerWeight = clamp01(
-      (weightsForDomain[r.provider as ProviderId] as number | undefined) ?? 0.7
-    );
+
+  const baseProvider = (r.provider.includes(":")
+  ? r.provider.split(":")[0]
+  : r.provider) as CoreProviderId;
+
+const providerWeight = clamp01(
+  weightsForDomain[baseProvider] ?? 0.7
+);
+
 
     const latencyMs = r.latencyMs ?? 0;
     const latencyScore = clamp01(1 / (1 + latencyMs / 2000)); // più veloce → più alto

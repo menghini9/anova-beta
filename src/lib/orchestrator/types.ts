@@ -7,10 +7,27 @@
 // ------------------------------------------------------
 // PROVIDER
 // ------------------------------------------------------
-export type ProviderId =
+
+// ID di base (senza tier) — usati da policy & scoring
+export type CoreProviderId =
   | "openai"
   | "anthropic"
   | "gemini"
+  | "mistral"
+  | "llama"
+  | "web";
+
+// ID completi con tier (usati ovunque nel core)
+export type ProviderId =
+  | "openai:econ"
+  | "openai:mid"
+  | "openai:max"
+  | "anthropic:econ"
+  | "anthropic:mid"
+  | "anthropic:max"
+  | "gemini:econ"
+  | "gemini:mid"
+  | "gemini:max"
   | "mistral"
   | "llama"
   | "web";
@@ -57,7 +74,6 @@ export interface ProviderResponse {
   success: boolean;
   error?: string;
 
-  // opzioni per costi/token
   tokensUsed?: number;
   estimatedCost?: number;
   promptTokens?: number;
@@ -71,7 +87,6 @@ export interface FusionResult {
   finalText: string;
   fusionScore: number; // 0..1
 
-  // elenco provider usati con punteggi → richiesto dal pannello Fusion
   used: Array<{
     provider: ProviderId;
     score: number;
@@ -80,7 +95,7 @@ export interface FusionResult {
 }
 
 // ------------------------------------------------------
-// USER PROFILE (preferenze persistenti)
+// USER PROFILE
 // ------------------------------------------------------
 export interface UserProfile {
   userId: string;
@@ -92,29 +107,29 @@ export interface UserProfile {
 }
 
 // ------------------------------------------------------
-// PERFORMANCE SAMPLES (per il futuro performance map)
+// PERFORMANCE SAMPLES
 // ------------------------------------------------------
 export interface PerformanceSample {
   provider: ProviderId;
   domain: Domain;
-  score: number;      // 0..1
+  score: number;
   latencyMs: number;
-  ts: number;         // timestamp
+  ts: number;
 }
 
 // ------------------------------------------------------
-// FUSION DEBUG (nuovo formato semplificato + coerente con UI)
+// FUSION DEBUG
 // ------------------------------------------------------
 export interface FusionDebug {
-  score: number;              // punteggio finale fusione
-  usedProviders: string[];    // provider utilizzati
-  discardedProviders: string[]; // provider scartati
-  domain: string;             // dominio finale scelto
-  finalTextPreview: string;   // anteprima testo fuso
+  score: number;
+  usedProviders: string[];
+  discardedProviders: string[];
+  domain: string;
+  finalTextPreview: string;
 }
 
 // ------------------------------------------------------
-// ORCHESTRATION META (meta pannello tecnico)
+// ORCHESTRATION META
 // ------------------------------------------------------
 export interface OrchestrationMeta {
   intent: Intent;
@@ -128,13 +143,11 @@ export interface OrchestrationMeta {
     providersRequested: ProviderId[];
   };
 
-  // pannello Fusion
   fusionDebug?: FusionDebug;
 
   autoPromptText?: string;
   memory?: any;
 
-  // preferenze utente intercettate a runtime
   preferenceDetected?: boolean;
 }
 

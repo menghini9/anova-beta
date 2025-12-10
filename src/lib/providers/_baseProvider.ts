@@ -3,23 +3,22 @@
 
 import { withTimeout } from "./_base";
 import type { ProviderResponse } from "../orchestrator/types";
-import type { ProviderKey } from "../orchestrator/types/ai";
+import type { ProviderId } from "../orchestrator/types";
 
 
-interface BaseInvokeConfig {
-  provider: ProviderKey;
-  exec: () => Promise<any>;       // funzione che esegue la chiamata API reale
-  parse: (raw: any) => {          // parser per estrarre il testo
+// PATCH — Supporta i nuovi provider estesi
+export interface BaseInvokeConfig {
+  provider: ProviderId;  // <-- Prima era string o ProviderKey
+  exec: () => Promise<any>;
+  parse: (raw: any) => {
     text: string;
     promptTokens?: number;
     completionTokens?: number;
   };
   timeoutMs: number;
-  cost: (usage: {
-    promptTokens: number;
-    completionTokens: number;
-  }) => number;                   // funzione per calcolare il costo
+  cost: (usage: { promptTokens: number; completionTokens: number }) => number;
 }
+
 
 export async function invokeBase(config: BaseInvokeConfig): Promise<ProviderResponse> {
   const t0 = Date.now();

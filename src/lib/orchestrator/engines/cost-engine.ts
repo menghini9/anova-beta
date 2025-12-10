@@ -8,23 +8,41 @@ import type { ProviderId } from "../types";
 // Prezzi indicativi per modello (USD per 1 token)
 // In futuro potremo caricarli da Firestore o da config remota
 const PRICE_MAP: Record<ProviderId, number> = {
-  openai: 0.002,      // per token generico stimato
-  anthropic: 0.003,
-  gemini: 0.0018,
-  mistral: 0.0015,
-  llama: 0.0005,
-  web: 0,             // ricerche web non hanno costo token
+  "openai:econ": 0.000002,
+  "openai:mid": 0.00001,
+  "openai:max": 0.00003,
+
+  "anthropic:econ": 0.000003,
+  "anthropic:mid": 0.000015,
+  "anthropic:max": 0.00004,
+
+  "gemini:econ": 0.0000018,
+  "gemini:mid": 0.00001,
+  "gemini:max": 0.00003,
+
+  mistral: 0.0000015,
+  llama: 0.0000005,
+  web: 0,
 };
 
-// Latenza prevedibile (ms) — valori medi
 const LATENCY_MAP: Record<ProviderId, number> = {
-  openai: 1200,
-  anthropic: 1400,
-  gemini: 1100,
+  "openai:econ": 1100,
+  "openai:mid": 1500,
+  "openai:max": 2000,
+
+  "anthropic:econ": 1300,
+  "anthropic:mid": 1600,
+  "anthropic:max": 2100,
+
+  "gemini:econ": 1000,
+  "gemini:mid": 1400,
+  "gemini:max": 1800,
+
   mistral: 900,
   llama: 800,
   web: 1600,
 };
+
 
 // ===============================
 // Token estimator (grezzo)
