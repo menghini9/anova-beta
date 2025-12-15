@@ -1,27 +1,35 @@
-import { invokeBase } from "../_baseProvider";
+// OPENAI_BALANCED_PROVIDER_V1
+import { invokeBase } from "../_base";
 import type { ProviderResponse } from "../../orchestrator/types";
-import { PROVIDER_TIMEOUT_MS } from "../../orchestrator/policy";
 
-export async function invokeOpenAIEconomic(prompt: string): Promise<ProviderResponse> {
-  const key = process.env.OPENAI_API_KEY;
-  if (!key) {
-    return {
-      provider: "openai:econ",
-      success: false,
-      text: "",
-      error: "OPENAI_API_KEY missing",
-      latencyMs: 0,
-      tokensUsed: 0,
-      promptTokens: 0,
-      completionTokens: 0,
-      estimatedCost: 0,
+interface OpenAIUsage {
+  prompt_tokens?: number;
+  completion_tokens?: number;
+}
+
+interface OpenAIResponse {
+  choices?: Array<{
+    message?: {
+      content?: string;
     };
+  }>;
+  usage?: OpenAIUsage;
+}
+
+export function invokeOpenAIEconomic(
+  prompt: string
+): Promise<ProviderResponse> {
+  const key = process.env.OPENAI_API_KEY;
+
+  if (!key) {
+    throw new Error("OPENAI_API_KEY missing");
   }
 
   return invokeBase({
     provider: "openai:econ",
+    timeoutMs: 12_000,
 
-    exec: async () => {
+    exec: async (): Promise<OpenAIResponse> => {
       const res = await fetch("https://api.openai.com/v1/chat/completions", {
         method: "POST",
         headers: {
@@ -35,19 +43,33 @@ export async function invokeOpenAIEconomic(prompt: string): Promise<ProviderResp
         }),
       });
 
-      if (!res.ok) return { error: `HTTP ${res.status}` };
-      return res.json();
+      const text = await res.text();
+
+      if (!res.ok) {
+        throw new Error(`OpenAI ${res.status}: ${text.slice(0, 300)}`);
+      }
+
+      return JSON.parse(text);
     },
 
-    parse: (raw) => ({
-      text: raw?.choices?.[0]?.message?.content ?? "",
-      promptTokens: raw?.usage?.prompt_tokens ?? 0,
-      completionTokens: raw?.usage?.completion_tokens ?? 0,
-    }),
+parse: (raw: unknown) => {
+  const data = raw as OpenAIResponse;
 
-    timeoutMs: PROVIDER_TIMEOUT_MS,
+  return {
+    text: data.choices?.[0]?.message?.content ?? "",
+    promptTokens: data.usage?.prompt_tokens ?? 0,
+    completionTokens: data.usage?.completion_tokens ?? 0,
+  };
+},
 
-    cost: ({ promptTokens, completionTokens }) =>
-      promptTokens * 0.00000015 + completionTokens * 0.00000060,
+
+    cost: ({
+      promptTokens,
+      completionTokens,
+    }: {
+      promptTokens: number;
+      completionTokens: number;
+    }) =>
+      (promptTokens * 0.00015 + completionTokens * 0.0006) / 1000,
   });
 }

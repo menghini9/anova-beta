@@ -45,13 +45,14 @@ export const BASE_WEIGHTS: Record<
     web: 0.85,
   },
 
-  strategy: {
-    openai: 0.9,
-    anthropic: 0.88,
-    gemini: 0.8,
-    mistral: 0.7,
-    llama: 0.6,
-  },
+strategy: {
+  openai: 0.9,
+  anthropic: 0.88,
+  gemini: 0.85,
+  mistral: 0.7,
+  llama: 0.6,
+},
+
 };
 
 

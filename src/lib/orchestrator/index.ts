@@ -1,157 +1,155 @@
-// ANOVA_ORCHESTRATOR_CORE_V1
-// Nuovo core orchestratore modulare di ANOVA β.
+// ANOVA_ORCHESTRATOR_CORE_V4
+// Orchestratore manifesto-driven.
+// ANOVA non interpreta contenuti: orchestra, valida, route, fonde.
 
-// =========================
-// 0) TIPI
-// =========================
 import type {
-  Intent,
   FusionResult,
   ProviderResponse,
   OrchestrationMeta,
-  Domain,
   ProviderId,
 } from "./types";
 
 // =========================
-// 1) ENGINE — livello cognitivo
-// =========================
-import { runIntentEngine } from "./engines/intent-engine";
-import { runClarityEngine } from "./engines/clarity-engine";
-import { runChecklistEngine } from "./engines/checklist-engine";
-import { runPromptEngine } from "./engines/prompt-engine";
-import { runRoutingEngine } from "./engines/routing-engine";
-import { runFusionEngine } from "./engines/fusion-engine";
-import { runDomainClassifier } from "./engines/domain-classifier";
-import { runDialogEngine } from "./engines/dialog-engine";
-
-// =========================
-// 2) QUANTUM MODEL
-// =========================
-import { buildQuantumState } from "./quantum/quantum-model";
-
-// =========================
-// 3) MEMORY SYSTEM
+// MEMORY
 // =========================
 import {
   initMemoryEngine,
   persistMemoryEngine,
 } from "./memory/memory-core";
 
-import { mergeSessionIntoUserMemory } from "./memory/userMemory";
+// =========================
+// MANIFEST & CONTROL
+// =========================
+import { ANOVA_MANIFESTO_TEXT } from "./manifesto/manifesto";
+import { parseAndValidateControl } from "./control/validate-control";
 
 // =========================
-// 4) PREFERENCE ENGINE
+// ROUTING & FUSION
 // =========================
-import { detectUserPreferenceStatement } from "./preference-engine/detectPreference";
-import { buildPreferenceAck } from "./preference-engine/preferenceReply";
+import { runRoutingEngine } from "./engines/routing-engine";
+import { runFusionEngine } from "./engines/fusion-engine";
 
 // =========================
-// 5) PROVIDER REALI
+// PROVIDERS
 // =========================
-// OPENAI
 import {
   invokeOpenAIEconomic,
   invokeOpenAIBalanced,
-  invokeOpenAIPremium
+  invokeOpenAIPremium,
 } from "../providers/openai";
 
-// ANTHROPIC
 import {
   invokeAnthropicEconomic,
   invokeAnthropicBalanced,
-  invokeAnthropicPremium
+  invokeAnthropicPremium,
 } from "../providers/anthropic";
 
-// GEMINI
 import {
   invokeGeminiEconomic,
   invokeGeminiBalanced,
-  invokeGeminiPremium
+  invokeGeminiPremium,
 } from "../providers/gemini";
 
-
 // =========================
-// 1) EXECUTOR PROVIDER
+// PROVIDER EXECUTOR
 // =========================
-
 async function executeProviders(
   providers: ProviderId[],
   prompt: string
 ): Promise<ProviderResponse[]> {
-  if (!providers || providers.length === 0) return [];
-
   const calls: Promise<ProviderResponse>[] = [];
 
-  for (const p of providers) {
-switch (p) {
-  case "openai:econ":
-    calls.push(invokeOpenAIEconomic(prompt));
-    break;
+for (const p of providers) {
+  try {
+    switch (p) {
+      case "openai:econ":
+        calls.push(invokeOpenAIEconomic(prompt));
+        break;
+      case "openai:mid":
+        calls.push(invokeOpenAIBalanced(prompt));
+        break;
+      case "openai:max":
+        calls.push(invokeOpenAIPremium(prompt));
+        break;
 
-  case "openai:mid":
-    calls.push(invokeOpenAIBalanced(prompt));
-    break;
+      case "anthropic:econ":
+        calls.push(invokeAnthropicEconomic(prompt));
+        break;
+      case "anthropic:mid":
+        calls.push(invokeAnthropicBalanced(prompt));
+        break;
+      case "anthropic:max":
+        calls.push(invokeAnthropicPremium(prompt));
+        break;
 
-  case "openai:max":
-    calls.push(invokeOpenAIPremium(prompt));
-    break;
+      case "gemini:econ":
+        calls.push(invokeGeminiEconomic(prompt));
+        break;
+      case "gemini:mid":
+        calls.push(invokeGeminiBalanced(prompt));
+        break;
+      case "gemini:max":
+        calls.push(invokeGeminiPremium(prompt));
+        break;
 
-  case "anthropic:econ":
-    calls.push(invokeAnthropicEconomic(prompt));
-    break;
-
-  case "anthropic:mid":
-    calls.push(invokeAnthropicBalanced(prompt));
-    break;
-
-  case "anthropic:max":
-    calls.push(invokeAnthropicPremium(prompt));
-    break;
-
-  case "gemini:econ":
-    calls.push(invokeGeminiEconomic(prompt));
-    break;
-
-  case "gemini:mid":
-    calls.push(invokeGeminiBalanced(prompt));
-    break;
-
-  case "gemini:max":
-    calls.push(invokeGeminiPremium(prompt));
-    break;
-  }
-
-  }
-
-  const results = await Promise.all(
-    calls.map((p, idx) =>
-      p.catch(
-        (e: any) =>
-          ({
-            provider: providers[idx],
+      default:
+        // Provider non gestito → fallimento controllato
+        calls.push(
+          Promise.resolve({
+            provider: p,
             text: "",
             success: false,
-            error: e?.message ?? "provider_failure",
+            error: "provider_not_supported",
             latencyMs: 0,
             tokensUsed: 0,
             promptTokens: 0,
             completionTokens: 0,
             estimatedCost: 0,
-          } as ProviderResponse)
-      )
+          })
+        );
+        break;
+    }
+  } catch (e: any) {
+    // 🔒 Se il provider lancia errori SINCRONI (es. API key mancante), non facciamo 500
+    calls.push(
+      Promise.resolve({
+        provider: p,
+        text: "",
+        success: false,
+        error: e?.message ?? "provider_failure",
+        latencyMs: 0,
+        tokensUsed: 0,
+        promptTokens: 0,
+        completionTokens: 0,
+        estimatedCost: 0,
+      })
+    );
+  }
+}
+
+
+  return Promise.all(
+    calls.map((c, i) =>
+      c.catch((e) => ({
+        provider: providers[i],
+        text: "",
+        success: false,
+        error: e?.message ?? "provider_failure",
+        latencyMs: 0,
+        tokensUsed: 0,
+        promptTokens: 0,
+        completionTokens: 0,
+        estimatedCost: 0,
+      }))
     )
   );
-
-  return results;
 }
 
 // =========================
-// 2) CORE API — getAIResponse
+// CORE API
 // =========================
-
 export async function getAIResponse(
-  prompt: string,
+  userInput: string,
   userId?: string
 ): Promise<{
   fusion: FusionResult;
@@ -159,269 +157,177 @@ export async function getAIResponse(
   meta: OrchestrationMeta;
   costThisRequest: number;
 }> {
-  // 1️⃣ Intent di base
-  const { intent } = runIntentEngine(prompt, userId);
+  // --------------------------------------------------
+  // 1️⃣ INIT MEMORY (NO INTENT)
+  // --------------------------------------------------
+const { session: sessionMemory } = await initMemoryEngine(
+  userInput,
+  null,
+  userId
+);
 
-  // 2️⃣ Memoria (sessione + utente)
-  const { session: sessionMemory, user: userMemory } = await initMemoryEngine(
-    prompt,
-    intent,
-    userId
-  );
 
-  // 3️⃣ Preference Engine — intercetta frasi tipo "preferisco risposte lunghe"
-  {
-    const prefResult = detectUserPreferenceStatement(prompt);
 
-    if (!prefResult.preference && !prefResult.needsClarification) {
-      // Nessuna preferenza esplicita → si prosegue
-    } else if (prefResult.needsClarification && prefResult.clarificationQuestion) {
-      // Frase ambigua → solo domanda di chiarimento, nessun provider
-      const fusion: FusionResult = {
-        finalText: prefResult.clarificationQuestion,
-        fusionScore: 1,
-        used: [],
-      };
+  // --------------------------------------------------
+  // 2️⃣ CONTROL PROMPT (MANIFESTO)
+  // --------------------------------------------------
+  const controlPrompt = `
+${ANOVA_MANIFESTO_TEXT}
 
-      const meta: OrchestrationMeta = {
-        intent,
-        smallTalkHandled: false,
-        clarificationUsed: true,
-        autoPromptUsed: false,
-        preferenceDetected: false,
-        stats: { callsThisRequest: 0, providersRequested: [] },
-        memory: sessionMemory,
-      };
+--- CONTEXT ---
+${JSON.stringify(sessionMemory.context ?? {}, null, 2)}
 
-      return {
-        fusion,
-        raw: [],
-        meta,
-        costThisRequest: 0,
-      };
-    } else if (prefResult.preference && prefResult.preference.confidence === "high") {
-      // Preferenza chiara → salviamo e rispondiamo subito
-      const preferenceHit = prefResult.preference;
+--- USER INPUT ---
+"${userInput}"
 
-      // Aggiorniamo sessionMemory
-      sessionMemory.preferences = {
-        ...(sessionMemory.preferences || {}),
-        detail: preferenceHit.detail ?? sessionMemory.preferences?.detail,
-        tone: preferenceHit.tone ?? sessionMemory.preferences?.tone,
-      };
+Rispondi ESCLUSIVAMENTE in JSON valido con chiave CONTROL.
+`;
 
-      // Persistenza se scope = persistent
-      if (userId && preferenceHit.scope === "persistent") {
-        try {
-          await mergeSessionIntoUserMemory(userId, {
-            prefs: {
-              detail: preferenceHit.detail,
-              tone: preferenceHit.tone,
-            },
-          });
-        } catch (err) {
-          console.error("[ANOVA] Errore aggiornamento preferenze:", err);
-        }
-      }
+  // --------------------------------------------------
+  // 3️⃣ CONTROL PHASE — ECON PROVIDERS
+  // --------------------------------------------------
+  const controlProviders: ProviderId[] = [
+    "openai:econ",
+   // "anthropic:econ",
+   // "gemini:econ",
+  ];
 
-      const lastAnswerExists =
-        sessionMemory.lastPrompts && sessionMemory.lastPrompts.length > 0;
+  const controlRaw = await executeProviders(controlProviders, controlPrompt);
 
-      const ack = buildPreferenceAck(preferenceHit, lastAnswerExists);
+  const { fusion: controlFusion } = runFusionEngine(controlRaw, "logic");
+console.log("📦 CONTROL RAW TEXT (fusion.finalText):", controlFusion.finalText);
+console.log("📦 CONTROL RAW PROVIDERS:", controlRaw.map(r => ({ p: r.provider, ok: r.success, err: r.error })));
 
-      const fusion: FusionResult = {
-        finalText: ack,
-        fusionScore: 1,
-        used: [],
-      };
+const parsed = parseAndValidateControl(controlFusion.finalText);
 
-      const meta: OrchestrationMeta = {
-        intent,
-        smallTalkHandled: false,
-        clarificationUsed: false,
-        autoPromptUsed: false,
-        preferenceDetected: true,
-        stats: { callsThisRequest: 0, providersRequested: [] },
-        memory: sessionMemory,
-      };
+if (!parsed.ok) {
+  console.error("❌ CONTROL VALIDATION FAILED:", parsed.error);
+  console.error("❌ CONTROL RAW TEXT:", controlFusion.finalText);
 
-      return {
-        fusion,
-        raw: [],
-        meta,
-        costThisRequest: 0,
-      };
-    }
-  }
-
-  // 4️⃣ Small talk → gestito dal dialog-engine
-  const dialog = runDialogEngine(intent);
-  if (dialog.handled && dialog.text) {
-    const fusion: FusionResult = {
-      finalText: dialog.text,
-      fusionScore: 1,
-      used: [],
-    };
-
-    const meta: OrchestrationMeta = {
-      intent,
-      smallTalkHandled: true,
-      clarificationUsed: false,
-      autoPromptUsed: false,
-      stats: { callsThisRequest: 0, providersRequested: [] },
-      memory: sessionMemory,
-    };
-
-    return {
-      fusion,
-      raw: [],
-      meta,
-      costThisRequest: 0,
-    };
-  }
-
-  // 5️⃣ Clarity Engine → domanda di chiarimento se necessario
-  const clarity = runClarityEngine(intent);
-  if (clarity.needsClarification && clarity.question) {
-    const fusion: FusionResult = {
-      finalText: clarity.question,
-      fusionScore: 1,
-      used: [],
-    };
-
-    const meta: OrchestrationMeta = {
-      intent,
-      smallTalkHandled: false,
-      clarificationUsed: true,
-      autoPromptUsed: false,
-      stats: { callsThisRequest: 0, providersRequested: [] },
-      memory: sessionMemory,
-    };
-
-    return {
-      fusion,
-      raw: [],
-      meta,
-      costThisRequest: 0,
-    };
-  }
-
-  // 6️⃣ Quantum model + dominio finale
-  const quantum = buildQuantumState(intent);
-  const domainResult = runDomainClassifier(intent, quantum);
-  const finalDomain: Domain = domainResult.domain;
-
-  // 7️⃣ Checklist (per ora solo preparazione, niente blocco)
-  const checklist = runChecklistEngine(intent);
-  // checklist.items può essere usato in futuro per domande guidate
-
-  // 8️⃣ Prompt Engine → super-prompt per i provider
-  const { prompt: improvedPrompt } = runPromptEngine({
-    intent,
-    sessionMemory,
-    userMemory,
-  });
-// ================================
-// 🔍 DEBUG LOG — Prompt Injected
-// Mostra il super-prompt finale (solo in sviluppo)
-// ================================
-if (process.env.NODE_ENV === "development") {
-  console.log("🔧 [ANOVA_DEBUG] Super-prompt generato:");
-  console.log(improvedPrompt);
-}
-
-  // 9️⃣ Routing Engine → scelta provider
-  const routingDecision = runRoutingEngine(intent, quantum);
-
-  if (!routingDecision.selected || routingDecision.selected.length === 0) {
-    const fusion: FusionResult = {
-      finalText: "Nessun provider disponibile (API key mancanti o disattivate).",
+  // ✅ Fallback pulito (no 500) — risposta diretta all'utente
+  return {
+    fusion: {
+      finalText:
+        "⚠️ Nessuna risposta utile dall’orchestratore (CONTROL non valido). Riprova o riformula la richiesta.",
       fusionScore: 0,
       used: [],
-    };
-
-    const meta: OrchestrationMeta = {
-      intent,
-      smallTalkHandled: false,
-      clarificationUsed: false,
-      autoPromptUsed: !!intent.autoPromptNeeded,
-      stats: { callsThisRequest: 0, providersRequested: [] },
-      autoPromptText: improvedPrompt,
+    },
+    raw: controlRaw,
+    meta: {
       memory: sessionMemory,
-    };
-
-    return {
-      fusion,
-      raw: [],
-      meta,
-      costThisRequest: 0,
-    };
-  }
-
-  // 🔟 Esecuzione provider
-  const raw = await executeProviders(routingDecision.selected, improvedPrompt);
-
-  // 1️⃣1️⃣ Fusione risposte
-  const { fusion } = runFusionEngine(raw, finalDomain);
-
-  // ================================
-// 🔍 Fusion Debug Info (sviluppo)
-// ================================
-// 🧠 Fusion Debug per pannello tecnico
-const fusionDebug = {
-  score: fusion.fusionScore,
-  usedProviders: fusion.used.map(u => u.provider),     // ← string[]
-  discardedProviders: routingDecision.selected
-    .filter(p => !fusion.used.map(u => u.provider).includes(p)),  // ← string[]
-  domain: finalDomain,
-  finalTextPreview: fusion.finalText.slice(0, 200) + "…",
-};
-
-
-
-  // 1️⃣2️⃣ Costo totale richiesta
-  const costThisRequest = raw.reduce(
-    (acc, r) => acc + (r.estimatedCost ?? 0),
-    0
-  );
-
-  // 1️⃣3️⃣ Persistenza memoria utente
-  if (userId) {
-    await persistMemoryEngine(userId, sessionMemory);
-  }
-
-  // 1️⃣4️⃣ Meta per pannello orchestratore
-const meta: OrchestrationMeta = {
-  intent,
-  smallTalkHandled: false,
-  clarificationUsed: false,
-  autoPromptUsed: !!intent.autoPromptNeeded,
-  stats: {
-    callsThisRequest: raw.length,
-    providersRequested: routingDecision.selected,
-  },
-  autoPromptText: improvedPrompt,
-  memory: sessionMemory,
-  preferenceDetected: false,
-  fusionDebug,          // ← ora è valido
-};
-
-
-  return {
-    fusion,
-    raw,
-    meta,
-    costThisRequest,
+      stats: {
+        callsThisRequest: controlRaw.length,
+        providersRequested: controlProviders,
+      },
+      tags: { control_valid: false },
+    },
+    costThisRequest: controlRaw.reduce((a, r) => a + (r.estimatedCost ?? 0), 0),
   };
 }
 
-// =========================
-// 3) Re-export tipi legacy (compatibilità)
-// =========================
 
-export type {
-  Intent,
-  FusionResult,
-  ProviderResponse,
-  OrchestrationMeta,
-} from "./types";
+  const control = parsed.value.CONTROL;
+
+  const baseStats = {
+    callsThisRequest: controlRaw.length,
+    providersRequested: controlProviders,
+  };
+
+  // --------------------------------------------------
+  // 4️⃣ CLARIFICATION → DOMANDE UTENTE
+  // --------------------------------------------------
+  if (control.request_stage === "CLARIFICATION") {
+    return {
+      fusion: {
+        finalText: control.missing_information.join("\n"),
+        fusionScore: 1,
+        used: [],
+      },
+      raw: controlRaw,
+      meta: {
+        memory: sessionMemory,
+        stats: baseStats,
+      },
+      costThisRequest: controlRaw.reduce(
+        (a, r) => a + (r.estimatedCost ?? 0),
+        0
+      ),
+    };
+  }
+// --------------------------------------------------
+// 5️⃣ EXECUTION PHASE
+// --------------------------------------------------
+const executionProviders = runRoutingEngine(control).filter((p) =>
+  p.startsWith("openai:")
+);
+
+console.log("🧭 ROUTING — selected providers:", executionProviders);
+
+// fallback se routing torna vuoto
+const safeExecutionProviders: ProviderId[] =
+  executionProviders.length > 0 ? executionProviders : ["openai:mid"];
+
+const executionPrompt = controlFusion.finalText;
+
+console.log("🧾 EXEC PROMPT length:", executionPrompt.length);
+console.log("🧾 EXEC PROMPT preview:", executionPrompt.slice(0, 400));
+
+const executionRaw = await executeProviders(
+  safeExecutionProviders,
+  executionPrompt
+);
+
+console.log(
+  "🏭 EXEC RAW:",
+  executionRaw.map((r) => ({
+    p: r.provider,
+    ok: r.success,
+    t: (r.text ?? "").slice(0, 120),
+    err: r.error,
+    cost: r.estimatedCost ?? 0,
+  }))
+);
+
+
+
+  const { fusion } = runFusionEngine(
+    executionRaw,
+    control.request_type === "OPERATIVA" ? "code" : "logic"
+  );
+
+  // --------------------------------------------------
+  // 6️⃣ MEMORY PERSIST
+  // --------------------------------------------------
+  if (userId && control.memory_update) {
+    sessionMemory.context = {
+      ...(sessionMemory.context ?? {}),
+      ...Object.fromEntries(
+        control.memory_update.session?.map((x) => [x.key, x.value]) ?? []
+      ),
+    };
+
+    await persistMemoryEngine(userId, sessionMemory);
+  }
+
+  // --------------------------------------------------
+  // 7️⃣ COST & META
+  // --------------------------------------------------
+  const costThisRequest = [...controlRaw, ...executionRaw].reduce(
+    (a, r) => a + (r.estimatedCost ?? 0),
+    0
+  );
+
+  return {
+    fusion,
+    raw: executionRaw,
+    meta: {
+      memory: sessionMemory,
+      stats: {
+        callsThisRequest:
+          controlRaw.length + executionRaw.length,
+        providersRequested: executionProviders,
+      },
+    },
+    costThisRequest,
+  };
+}

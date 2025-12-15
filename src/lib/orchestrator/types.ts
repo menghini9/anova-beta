@@ -1,14 +1,14 @@
 // ======================================================
-// ANOVA_ORCHESTRATOR_TYPES_V50
-// Tipi unificati e aggiornati per Intent, Provider, Fusion,
-// Meta, Memoria e Debug.
+// ANOVA_ORCHESTRATOR_TYPES_V51
+// Tipi riallineati al modello manifesto-driven:
+// - ANOVA non interpreta contenuto
+// - Stato operativo = ControlBlock (non Meta)
+// - Meta = tracciamento, KPI, debug, memoria
 // ======================================================
 
 // ------------------------------------------------------
 // PROVIDER
 // ------------------------------------------------------
-
-// ID di base (senza tier) — usati da policy & scoring
 export type CoreProviderId =
   | "openai"
   | "anthropic"
@@ -17,7 +17,6 @@ export type CoreProviderId =
   | "llama"
   | "web";
 
-// ID completi con tier (usati ovunque nel core)
 export type ProviderId =
   | "openai:econ"
   | "openai:mid"
@@ -35,16 +34,13 @@ export type ProviderId =
 // ------------------------------------------------------
 // DOMAINI
 // ------------------------------------------------------
-export type Domain =
-  | "logic"
-  | "code"
-  | "creative"
-  | "factual"
-  | "strategy";
+export type Domain = "logic" | "code" | "creative" | "factual" | "strategy";
 
 // ------------------------------------------------------
-// INTENT (esteso e modernizzato)
+// INTENT (DEPRECATO nel flusso manifesto-driven)
 // ------------------------------------------------------
+// ⚠️ Non eliminato per compatibilità con parti vecchie,
+// ma NON deve essere obbligatorio nel core manifesto-driven.
 export interface Intent {
   purpose: Domain;
   tone: "concise" | "neutral" | "rich";
@@ -65,7 +61,7 @@ export interface Intent {
 }
 
 // ------------------------------------------------------
-// PROVIDER RESPONSE (standardizzato)
+// PROVIDER RESPONSE
 // ------------------------------------------------------
 export interface ProviderResponse {
   provider: ProviderId;
@@ -81,12 +77,11 @@ export interface ProviderResponse {
 }
 
 // ------------------------------------------------------
-// FUSION RESULT (risultato della fusione AI)
+// FUSION RESULT
 // ------------------------------------------------------
 export interface FusionResult {
   finalText: string;
   fusionScore: number; // 0..1
-
   used: Array<{
     provider: ProviderId;
     score: number;
@@ -118,7 +113,7 @@ export interface PerformanceSample {
 }
 
 // ------------------------------------------------------
-// FUSION DEBUG
+// DEBUG
 // ------------------------------------------------------
 export interface FusionDebug {
   score: number;
@@ -129,15 +124,35 @@ export interface FusionDebug {
 }
 
 // ------------------------------------------------------
-// ORCHESTRATION META
+// MEMORY (soft-typed, niente più "any" a caso)
 // ------------------------------------------------------
+export interface SessionMemory {
+  context?: Record<string, unknown>;
+  history?: Array<{
+    ts: number;
+    role: "user" | "assistant" | "system";
+    text: string;
+  }>;
+  // spazio per estensioni future senza rompere i tipi
+  [k: string]: unknown;
+}
+
+// ------------------------------------------------------
+// ORCHESTRATION META (manifesto-driven)
+// ------------------------------------------------------
+// Regola d’oro: meta NON contiene "phase" o stati operativi.
+// Quello vive nel ControlBlock.
 export interface OrchestrationMeta {
-  intent: Intent;
+  // Compatibilità: alcuni pezzi vecchi possono ancora valorizzarlo.
+  // Nel flusso manifesto-driven può restare undefined.
+  intent?: Intent;
 
-  smallTalkHandled: boolean;
-  clarificationUsed: boolean;
-  autoPromptUsed: boolean;
+  // Flag legacy: tenuti opzionali, perché non fanno parte del nuovo core
+  smallTalkHandled?: boolean;
+  clarificationUsed?: boolean;
+  autoPromptUsed?: boolean;
 
+  // KPI minimi (qui si rompevano i tuoi errori)
   stats?: {
     callsThisRequest: number;
     providersRequested: ProviderId[];
@@ -146,11 +161,16 @@ export interface OrchestrationMeta {
   fusionDebug?: FusionDebug;
 
   autoPromptText?: string;
-  memory?: any;
+
+  // Memoria tipizzata (soft)
+  memory?: SessionMemory;
 
   preferenceDetected?: boolean;
+
+  // Campo libero per telemetria senza “inventare” nuove interfacce ogni volta
+  tags?: Record<string, string | number | boolean>;
 }
 
 // ======================================================
-// FINE TYPES V50
+// FINE TYPES V51
 // ======================================================

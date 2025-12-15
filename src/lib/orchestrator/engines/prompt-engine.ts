@@ -1,5 +1,6 @@
-// ANOVA_PROMPT_ENGINE_V1
-// Motore che costruisce il super-prompt da inviare ai provider.
+// ANOVA_PROMPT_ENGINE_V2
+// Super-prompt basato su "Manifesto Esecutivo" + contesto minimo.
+// Obiettivo: far lavorare le AI dentro regole stabili, senza citare provider/modelli.
 
 import type { Intent } from "../types";
 
@@ -13,154 +14,153 @@ export interface PromptEngineOutput {
   prompt: string;
 }
 
-/**
- * Versione estratta del vecchio buildAutoPrompt, ripulita e pronta per uso modulare.
- */
+/* ======================================================
+ * 0) MANIFESTO ESECUTIVO (V1)
+ *    - È la "libreria" di regole che ogni AI deve seguire.
+ *    - Non deve mai citare provider, routing, fusion.
+ * ====================================================== */
+const MANIFESTO_V1 = `
+# ANOVA — MANIFESTO OPERATIVO PER LE AI (V1)
+
+## IDENTITÀ
+Tu sei ANOVA β, un assistente AI. Rispondi come un’unica voce: naturale, competente, utile.
+NON citare modelli, provider, routing o sistemi interni.
+
+## INPUT DISPONIBILI
+Riceverai:
+1) Richiesta utente (testo grezzo)
+2) Questo manifesto
+3) Eventuali dettagli aggiunti dall’utente in seguito
+
+Non hai memoria autonoma: ricostruisci contesto solo da ciò che ricevi.
+
+## CLASSIFICAZIONE OBBLIGATORIA (scegli UNA categoria)
+A) INFORMATIVA → l’utente vuole capire
+B) OPERATIVA/CREATIVA → l’utente vuole ottenere un output (sito, piano, codice, procedura…)
+C) DIALOGO → conversazione/feedback/valutazione
+
+Se sei incerto, scegli INFORMATIVA.
+
+## PROCEDURA INFORMATIVA
+- Se tema ampio o ambiguo: NON rispondere subito.
+- Produci una checklist di chiarimento con opzioni selezionabili (non domande vaghe).
+- Non chiedere “vuoi risposta lunga/corta” come prima cosa.
+
+## PROCEDURA OPERATIVA/CREATIVA
+- NON produrre subito il lavoro finale se mancano dati.
+- Genera checklist completa (fondamentali vs opzionali).
+- Assumi che l’utente non sappia cosa serve: proponi tu le opzioni.
+
+## PROCEDURA DIALOGO
+- Rispondi naturale, breve, coerente.
+- Niente checklist se non servono.
+
+## OUTPUT (scegli UNO solo formato)
+1) Checklist di chiarimento
+2) Domande mirate (1–3) tecniche
+3) Risposta completa
+4) Risposta dialogica
+`;
+
+/* ======================================================
+ * 1) RUN ENGINE
+ * ====================================================== */
 export function runPromptEngine(input: PromptEngineInput): PromptEngineOutput {
   const { intent, sessionMemory, userMemory } = input;
   const prompt = buildAutoPrompt(intent, sessionMemory, userMemory);
   return { prompt };
 }
 
-// === IMPLEMENTAZIONE AUTO-PROMPT (portata dal core legacy) === //
+/* ======================================================
+ * 2) BUILD AUTO PROMPT
+ * ====================================================== */
+function buildAutoPrompt(intent: Intent, sessionMemory?: any, userMemory?: any): string {
+  const userText = (intent.original ?? "").trim();
 
-function buildAutoPrompt(
-  intent: Intent,
-  sessionMemory?: any,
-  userMemory?: any
-): string {
-  const userText = intent.original.trim();
+  // ---- 2.1 Contesto minimo dalla memoria (senza “preferenze stile” aggressive)
+  const memory = extractMemorySnippet(sessionMemory, userMemory);
 
-  // Casi semplici → niente arricchimento
-  if (!intent.autoPromptNeeded) {
-    return userText;
-  }
+  // ---- 2.2 Mini guida operativa (molto corta) basata sull’intent
+  // Nota: NON chiediamo mai subito “lungo/corto”. Si usa solo come hint.
+  const intentHints = buildIntentHints(intent);
 
-  // 1️⃣ Micro-classificazione del tipo di risposta
-  let responseType = "risposta_generica";
-  if (intent.purpose === "code") responseType = "supporto_tecnico";
-  else if (intent.purpose === "strategy") responseType = "analisi_strategica";
-  else if (intent.purpose === "factual") responseType = "informazione_fattuale";
-  else if (intent.purpose === "creative") responseType = "creatività_guidata";
+  // ---- 2.3 Prompt finale: Manifesto + contesto + richiesta
+  // Importante: struttura sempre uguale per stabilità e debug.
+  return `
+${MANIFESTO_V1}
 
-  // 2️⃣ Preferenze di dettaglio e tono dalla memoria (sessione + utente)
-  let memoryDetail: "low" | "medium" | "high" | undefined = undefined;
-  let memoryTone: "concise" | "neutral" | "rich" | undefined = undefined;
-  let goals: string[] = [];
+---
 
+## CONTESTO (se presente)
+${memory || "Nessun contesto aggiuntivo disponibile."}
+
+---
+
+## SEGNALI DALL'INTENT (non obbligatori, solo hint)
+${intentHints}
+
+---
+
+## RICHIESTA UTENTE (testo originale)
+"""${userText}"""
+
+---
+
+## ISTRUZIONE FINALE
+1) Classifica la richiesta (A/B/C) secondo manifesto.
+2) Applica la procedura relativa.
+3) Produci SOLO l’output scelto (uno dei 4 formati).
+`.trim();
+}
+
+/* ======================================================
+ * 3) HELPERS
+ * ====================================================== */
+function extractMemorySnippet(sessionMemory?: any, userMemory?: any): string {
   try {
-    if (sessionMemory && typeof sessionMemory === "object") {
-      if (Array.isArray(sessionMemory.goals)) {
-        goals = sessionMemory.goals;
-      }
-      if (sessionMemory.preferences) {
-        memoryDetail = sessionMemory.preferences.detail ?? memoryDetail;
-        memoryTone = sessionMemory.preferences.tone ?? memoryTone;
-      }
+    const lines: string[] = [];
+
+    // Obiettivi ricorrenti (se esistono)
+    const goals =
+      (Array.isArray(sessionMemory?.goals) && sessionMemory.goals) ||
+      (Array.isArray(userMemory?.goals) && userMemory.goals) ||
+      [];
+
+    if (goals.length > 0) {
+      lines.push(`- Obiettivi ricorrenti: ${goals.join(", ")}`);
     }
 
-    // Fallback: memoria utente persistente
-    if (userMemory && typeof userMemory === "object") {
-      if (!memoryDetail && userMemory.prefs?.detail) {
-        memoryDetail = userMemory.prefs.detail;
-      }
-      if (!memoryTone && userMemory.prefs?.tone) {
-        memoryTone = userMemory.prefs.tone;
-      }
-      if (Array.isArray(userMemory.goals) && goals.length === 0) {
-        goals = userMemory.goals;
-      }
+    // Ultimi prompt (se esistono) — utile per “continuità chat”
+    const lastPrompts = Array.isArray(sessionMemory?.lastPrompts)
+      ? sessionMemory.lastPrompts
+      : [];
+
+    if (lastPrompts.length > 0) {
+      const last = String(lastPrompts[lastPrompts.length - 1] ?? "").slice(0, 220);
+      if (last.trim()) lines.push(`- Ultimo contesto (estratto): ${last}${last.length >= 220 ? "…" : ""}`);
     }
+
+    // Eventuali note di sessione
+    const notes = typeof sessionMemory?.notes === "string" ? sessionMemory.notes.trim() : "";
+    if (notes) lines.push(`- Note sessione: ${notes.slice(0, 220)}${notes.length >= 220 ? "…" : ""}`);
+
+    return lines.join("\n");
   } catch {
-    // Non blocchiamo l'auto-prompt per problemi sulla memoria
+    return "";
   }
+}
 
-  // 3️⃣ Priorità: lessico V12 → memoria → complessità prompt
-  let effectiveDetail: "low" | "medium" | "high";
-  if (intent.lexiconDetail) {
-    effectiveDetail = intent.lexiconDetail;
-  } else if (memoryDetail) {
-    effectiveDetail = memoryDetail;
-  } else {
-    effectiveDetail =
-      intent.complexity === "high"
-        ? "high"
-        : intent.complexity === "medium"
-        ? "medium"
-        : "low";
-  }
+function buildIntentHints(intent: Intent): string {
+  const hints: string[] = [];
 
-  if (intent.lexiconTone) {
-    memoryTone = intent.lexiconTone;
-  }
+  if (intent?.purpose) hints.push(`- Dominio stimato: ${intent.purpose}`);
+  if (intent?.mode) hints.push(`- Mode stimata: ${intent.mode}`);
+  if (intent?.isSmallTalk) hints.push(`- Small talk: true`);
+  if (intent?.isSimpleQuestion) hints.push(`- Domanda semplice: true`);
+  if (intent?.needsClarification) hints.push(`- Needs clarification: true (${intent.clarificationType ?? "n/a"})`);
 
-  let detailLevelText: string;
-  if (effectiveDetail === "high") {
-    detailLevelText = "molto dettagliata, strutturata e completa";
-  } else if (effectiveDetail === "medium") {
-    detailLevelText = "chiara e ben organizzata";
-  } else {
-    detailLevelText = "sintetica ma utile";
-  }
+  // Non vincoliamo l’AI, è solo segnale.
+  if (intent?.complexity) hints.push(`- Complessità stimata: ${intent.complexity}`);
 
-  // 4️⃣ Tono suggerito (se appreso)
-  let toneInstruction = "";
-  if (memoryTone === "concise") {
-    toneInstruction =
-      "Usa un tono diretto e sintetico, senza giri di parole inutili.\n";
-  } else if (memoryTone === "rich") {
-    toneInstruction =
-      "Usa un tono ricco, con esempi e immagini mentali, mantenendo comunque chiarezza.\n";
-  } else if (memoryTone === "neutral") {
-    toneInstruction =
-      "Usa un tono professionale e neutrale, chiaro ma non eccessivamente informale.\n";
-  }
-
-  // 5️⃣ Identità di ANOVA per i provider
-  const anovaIntro =
-    "Tu sei un modello AI orchestrato da **ANOVA β**, un sistema cognitivo che coordina più intelligenze artificiali " +
-    "per produrre risposte affidabili, strutturate e orientate all’obiettivo dell’utente. " +
-    "ANOVA β fornisce un contesto standardizzato per migliorare la qualità della risposta.";
-
-  // 6️⃣ Aggancio alla mini-memoria locale
-  let memorySnippet = "";
-  if (goals.length > 0) {
-    memorySnippet +=
-      "\n\n📚 **Contesto persistente (estratto dalla memoria):**\n" +
-      `- Obiettivi ricorrenti dell’utente: ${goals.join(", ")}\n`;
-  }
-
-  if (memoryTone || memoryDetail) {
-    memorySnippet += "\n🎛 **Preferenze apprese:**\n";
-    if (memoryDetail === "high") {
-      memorySnippet += "- L’utente tende a preferire risposte più approfondite.\n";
-    } else if (memoryDetail === "low") {
-      memorySnippet += "- L’utente tende a preferire risposte più sintetiche.\n";
-    }
-    if (memoryTone === "concise") {
-      memorySnippet += "- Tono preferito: diretto e semplice.\n";
-    } else if (memoryTone === "rich") {
-      memorySnippet += "- Tono preferito: ricco e narrativo.\n";
-    } else if (memoryTone === "neutral") {
-      memorySnippet += "- Tono preferito: professionale e neutro.\n";
-    }
-  }
-
-  // 7️⃣ Template finale del super-prompt
-  return (
-    `${anovaIntro}\n\n` +
-    `⚡ **Contesto della richiesta attuale:**\n` +
-    `L’utente ha chiesto: """${userText}"""\n\n` +
-    `⚙️ **Tipo di risposta richiesta:** ${responseType}\n` +
-    `📏 **Livello di dettaglio richiesto:** ${detailLevelText}\n` +
-    memorySnippet +
-    `\n🧩 **Obiettivi per la tua risposta:**\n` +
-    `1. Rispondi in modo accurato, chiaro e non prolisso.\n` +
-    `2. Se utile, suddividi in sezioni o passi operativi.\n` +
-    `3. Mantieni coerenza e aderenza stretta alla richiesta.\n` +
-    `4. Aggiungi note pratiche / avvertenze quando appropriate.\n` +
-    `5. Evita contenuti inutili, vaghi o inventati.\n\n` +
-    (toneInstruction ? `🎙 **Tono suggerito:** ${toneInstruction}\n` : "") +
-    `🎯 **Missione finale:** Produrre la versione migliore possibile della risposta che un utente esperto si aspetterebbe.\n`
-  );
+  return hints.length ? hints.join("\n") : "Nessun segnale utile dall’intent.";
 }

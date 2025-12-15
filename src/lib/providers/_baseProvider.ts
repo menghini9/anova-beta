@@ -1,15 +1,24 @@
-// ⬇️ BLOCCO 1 — Base Provider V1
-// ANOVA_ORCHESTRATOR_V50_PROVIDER_BASE
+// ⬇️ BLOCCO 1 — Base Provider V2 (Robusto)
+// ANOVA_ORCHESTRATOR_V52_PROVIDER_BASE
 
 import { withTimeout } from "./_base";
-import type { ProviderResponse } from "../orchestrator/types";
-import type { ProviderId } from "../orchestrator/types";
+import type { ProviderResponse, ProviderId } from "../orchestrator/types";
 
+// ------------------------------
+// Tipi interni di errore standard
+// ------------------------------
+type ExecErrorType = "http" | "timeout" | "parse" | "provider" | "unknown";
 
-// PATCH — Supporta i nuovi provider estesi
+type ExecOk = { ok: true; raw: any };
+type ExecFail = { ok: false; type: ExecErrorType; message: string; raw?: any };
+type ExecResult = ExecOk | ExecFail;
+
+// ------------------------------
+// Config
+// ------------------------------
 export interface BaseInvokeConfig {
-  provider: ProviderId;  // <-- Prima era string o ProviderKey
-  exec: () => Promise<any>;
+  provider: ProviderId;
+  exec: () => Promise<ExecResult>; // ⬅️ ora deve ritornare ExecResult
   parse: (raw: any) => {
     text: string;
     promptTokens?: number;
@@ -19,35 +28,75 @@ export interface BaseInvokeConfig {
   cost: (usage: { promptTokens: number; completionTokens: number }) => number;
 }
 
+// ------------------------------
+// Helper
+// ------------------------------
+function safeStr(x: any, max = 400) {
+  const s = typeof x === "string" ? x : JSON.stringify(x);
+  return s.length > max ? s.slice(0, max) + "..." : s;
+}
 
-export async function invokeBase(config: BaseInvokeConfig): Promise<ProviderResponse> {
+// ------------------------------
+// MAIN
+// ------------------------------
+export async function invokeBase(
+  config: BaseInvokeConfig
+): Promise<ProviderResponse> {
   const t0 = Date.now();
 
   try {
-    // 1️⃣ ESECUZIONE CON TIMEOUT
-    const raw = await withTimeout(config.exec(), config.timeoutMs);
+    // 1) Esecuzione con timeout
+    const execResult = await withTimeout(config.exec(), config.timeoutMs);
 
-    // 2️⃣ PARSING NORMALIZZATO
-    const parsed = config.parse(raw);
-    const text = parsed.text ?? "";
+    // 2) Se exec ha fallito → NON è empty_response
+    if (!execResult.ok) {
+      return {
+        provider: config.provider,
+        text: "",
+        success: false,
+        error: `[${execResult.type}] ${execResult.message}`,
+        latencyMs: Date.now() - t0,
+        tokensUsed: 0,
+        promptTokens: 0,
+        completionTokens: 0,
+        estimatedCost: 0,
+      };
+    }
 
-    // 3️⃣ TOKEN NORMALIZZATI
+    // 3) Parse normalizzato
+    let parsed;
+    try {
+      parsed = config.parse(execResult.raw);
+    } catch (e: any) {
+      return {
+        provider: config.provider,
+        text: "",
+        success: false,
+        error: `[parse] ${e?.message ?? "parse_failed"} — raw: ${safeStr(execResult.raw)}`,
+        latencyMs: Date.now() - t0,
+        tokensUsed: 0,
+        promptTokens: 0,
+        completionTokens: 0,
+        estimatedCost: 0,
+      };
+    }
+
+    const text = (parsed.text ?? "").trim();
+
+    // 4) Token/costo
     const promptTokens = parsed.promptTokens ?? 0;
     const completionTokens = parsed.completionTokens ?? 0;
     const tokensUsed = promptTokens + completionTokens;
+    const estimatedCost = config.cost({ promptTokens, completionTokens });
 
-    // 4️⃣ COSTO
-    const estimatedCost = config.cost({
-      promptTokens,
-      completionTokens,
-    });
+    // 5) Empty response = caso vero, non “errore mascherato”
+    const isEmpty = text.length === 0;
 
     return {
       provider: config.provider,
       text,
-      success: Boolean(text),
-      error: text ? undefined : "empty_response",
-
+      success: !isEmpty,
+      error: isEmpty ? "empty_response" : undefined,
       latencyMs: Date.now() - t0,
       tokensUsed,
       promptTokens,
@@ -55,12 +104,16 @@ export async function invokeBase(config: BaseInvokeConfig): Promise<ProviderResp
       estimatedCost,
     };
   } catch (e: any) {
+    const msg = e?.message ?? "unknown_error";
+    const type: ExecErrorType = msg.toLowerCase().includes("timeout")
+      ? "timeout"
+      : "unknown";
+
     return {
       provider: config.provider,
       text: "",
       success: false,
-      error: e?.message ?? "unknown_error",
-
+      error: `[${type}] ${msg}`,
       latencyMs: Date.now() - t0,
       tokensUsed: 0,
       promptTokens: 0,
@@ -69,4 +122,5 @@ export async function invokeBase(config: BaseInvokeConfig): Promise<ProviderResp
     };
   }
 }
+
 // ⬆️ FINE BLOCCO 1

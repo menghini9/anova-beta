@@ -1,12 +1,12 @@
-// ANOVA_FUSION_ENGINE_V1
-// Motore di fusione avanzata delle risposte dei provider.
+// ANOVA_FUSION_ENGINE_V2
+// Motore di fusione controllata delle risposte AI.
+// Produce UNA risposta coerente, come se fosse un'unica intelligenza.
 
-import type { FusionResult, Domain } from "../types";
-import type { ProviderResponse } from "../types";
+import type { FusionResult, Domain, ProviderResponse } from "../types";
 import { runQualityEngine, type EvaluatedResponse } from "./quality-engine";
 
 /* ------------------------------------------
- * TIPI ESPORTATI
+ * OUTPUT
  * ------------------------------------------ */
 
 export interface FusionEngineOutput {
@@ -18,90 +18,84 @@ export interface FusionEngineOutput {
  * MOTORE PRINCIPALE
  * ------------------------------------------ */
 
-/**
- * Esegue la fusione delle risposte dei provider:
- * - sceglie una risposta backbone
- * - aggiunge integrazioni da altri provider non pessimi
- * - calcola un fusionScore aggregato
- */
 export function runFusionEngine(
   responses: ProviderResponse[],
   domain: Domain = "logic"
 ): FusionEngineOutput {
   if (!responses || responses.length === 0) {
-    const empty: FusionResult = {
-      finalText: "Nessuna risposta ricevuta dai provider.",
-      fusionScore: 0,
-      used: [],
+    return {
+      fusion: {
+        finalText: "Nessuna risposta ricevuta dai provider.",
+        fusionScore: 0,
+        used: [],
+      },
+      evaluated: [],
     };
-    return { fusion: empty, evaluated: [] };
   }
 
-  const qualityResult = runQualityEngine(responses, domain);
-  const evaluated = qualityResult.evaluated;
+  // 1️⃣ Valutazione qualità
+  const { evaluated } = runQualityEngine(responses, domain);
 
-  // Filtriamo solo quelle minimamente utili
+  // 2️⃣ Filtriamo risposte realmente utilizzabili
   const usable = evaluated
     .filter(
       (e) =>
         e.finalScore > 0 &&
-        (e.response.text?.trim().length ?? 0) > 0
+        e.response.text &&
+        e.response.text.trim().length > 0
     )
     .sort((a, b) => b.finalScore - a.finalScore);
 
   if (usable.length === 0) {
-    const none: FusionResult = {
-      finalText: "Nessuna risposta utile dai provider.",
-      fusionScore: 0,
-      used: [],
+    return {
+      fusion: {
+        finalText: "Nessuna risposta utile dai provider.",
+        fusionScore: 0,
+        used: [],
+      },
+      evaluated,
     };
-    return { fusion: none, evaluated };
   }
 
-  // Limitiamo a massimo 3 provider "usati" per fusione
-  const topUsed = usable.slice(0, 3);
-  const best = topUsed[0];
-  const bestScore = best.finalScore;
+  // 3️⃣ Backbone: la migliore risposta
+  const backbone = usable[0];
 
-  // Selezioniamo le integrazioni: provider non troppo peggiori del migliore
-  const additives = topUsed
-    .slice(1)
-    .filter((e) => e.finalScore >= bestScore * 0.55)
-    .map((e) => e.response.text)
-    .filter(Boolean) as string[];
+  // 4️⃣ Integrazioni soft (solo se non troppo peggiori)
+  const integrations = usable
+    .slice(1, 3)
+    .filter((e) => e.finalScore >= backbone.finalScore * 0.65)
+    .map((e) => e.response.text!.trim());
 
-  // Testo finale: spina dorsale + integrazioni
-  let finalText = (best.response.text || "").trim();
+  // 5️⃣ Costruzione testo finale (fusione INVISIBILE)
+  let finalText = backbone.response.text!.trim();
 
-  if (additives.length > 0) {
-    finalText =
-      finalText +
-      "\n\n—\n" +
-      "📌 **Integrazioni da altri modelli (merge controllato):**\n" +
-      additives.map((t) => `• ${t.trim()}`).join("\n");
+  if (integrations.length > 0) {
+    finalText += "\n\n" + integrations.join("\n\n");
   }
 
-  const fusionScoreRaw =
-    topUsed.reduce((acc, e) => acc + e.finalScore, 0) / topUsed.length;
+  // 6️⃣ Fusion score pesato:
+  // backbone pesa di più delle integrazioni
+  const fusionScore =
+    clamp01(
+      backbone.finalScore * 0.7 +
+      integrations.length * 0.15
+    );
 
   const fusion: FusionResult = {
-    finalText: finalText || "Nessuna risposta utile dai provider.",
-    fusionScore: clamp01(fusionScoreRaw),
-    used: topUsed.map((e) => ({
+    finalText,
+    fusionScore,
+    used: usable.slice(0, 3).map((e) => ({
       provider: e.response.provider,
       score: clamp01(e.finalScore),
       latencyMs: e.response.latencyMs,
     })),
   };
 
-  return {
-    fusion,
-    evaluated,
-  };
+  return { fusion, evaluated };
 }
 
 /* ------------------------------------------
- * HELPERS INTERNI
+ * HELPERS
  * ------------------------------------------ */
 
 function clamp01(v: number): number {

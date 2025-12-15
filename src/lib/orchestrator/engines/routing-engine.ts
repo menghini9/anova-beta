@@ -1,125 +1,94 @@
-// ANOVA_ROUTING_ENGINE_V3 — FULL MULTI-PROVIDER (tier + cost profile)
+// ANOVA_ROUTING_ENGINE_V5
+// Routing deterministico, esecutivo, manifesto-driven.
+// NON decide cosa fare. Decide SOLO chi chiamare.
 
-import type { ProviderId, Intent, CoreProviderId } from "../types";
-import type { QuantumState } from "../quantum/quantum-model";
-import { BASE_WEIGHTS } from "../policy";
-import { COST_PROFILES, CostProfileId, getUserCostProfile } from "./cost-profile";
+import type { ProviderId } from "../types";
+import type { ControlBlock, ProviderLevel } from "../control/control-block";
 
-export interface RoutingDecision {
-  selected: ProviderId[];
-  ranked: Array<{ provider: ProviderId; weight: number }>;
-  fanoutCount: number;
-}
+// --------------------------------------------------
+// Helpers
+// --------------------------------------------------
+const confidenceRank: Record<"low" | "medium" | "high", number> = {
+  low: 0,
+  medium: 1,
+  high: 2,
+};
 
-const ALL_PROVIDERS: ProviderId[] = [
-  "openai:econ",
-  "openai:mid",
-  "openai:max",
-
-  "anthropic:econ",
-  "anthropic:mid",
-  "anthropic:max",
-
-  "gemini:econ",
-  "gemini:mid",
-  "gemini:max",
-
-  "mistral",
-  "llama",
-  "web",
-];
-
-// -------------------------------------------------------
-// QUANTUM + POLICY
-// -------------------------------------------------------
-function computeQuantumScores(
-  quantum: QuantumState
-): Record<ProviderId, number> {
-  const scores = {} as Record<ProviderId, number>;
-  for (const p of ALL_PROVIDERS) scores[p] = 0;
-
-  for (const interp of quantum.interpretations) {
-    const domain = interp.domain;
-
-const domainWeights: Partial<Record<CoreProviderId, number>> =
-  BASE_WEIGHTS[domain] || {};
-
-
-    for (const provider of ALL_PROVIDERS) {
-      const baseId: CoreProviderId =
-        provider.includes(":")
-          ? (provider.split(":")[0] as CoreProviderId)
-          : (provider as CoreProviderId);
-
-     const baseline = domainWeights[baseId] ?? 0.5;
-
-      scores[provider] += baseline * interp.probability;
-    }
-  }
-
-  return scores;
-}
-
-// -------------------------------------------------------
-// COST PROFILE APPLICATION
-// -------------------------------------------------------
-function applyCostProfile(
-  raw: Record<ProviderId, number>,
-  profile: CostProfileId
-): Record<ProviderId, number> {
-  const { allowed, qualityBoost, costPenalty } = COST_PROFILES[profile];
-  const final: Record<ProviderId, number> = { ...raw };
-
-  for (const prov of ALL_PROVIDERS) {
-    if (!allowed.includes(prov)) {
-      final[prov] = 0;
-      continue;
-    }
-
-    const score = raw[prov];
-    const adjusted = score * qualityBoost - score * costPenalty * 0.2;
-    final[prov] = Math.max(0, adjusted);
-  }
-
-  return final;
-}
-
-// -------------------------------------------------------
-// MAIN ENGINE
-// -------------------------------------------------------
-export function runRoutingEngine(
-  intent: Intent,
-  quantum: QuantumState,
-  userId?: string
-): RoutingDecision {
-  const profile = getUserCostProfile(userId); // CostProfileId
-
-  const qScores = computeQuantumScores(quantum);
-  const profileScores = applyCostProfile(qScores, profile);
-
-  const available = ALL_PROVIDERS.filter(
-    (p) => profileScores[p] > 0
-  );
-
-  if (available.length === 0) {
-    return { selected: [], ranked: [], fanoutCount: 0 };
-  }
-
-  const ranked = available
-    .map((p) => ({
-      provider: p,
-      weight: Number(profileScores[p].toFixed(3)),
-    }))
-    .sort((a, b) => b.weight - a.weight);
-
-  const fanout = Math.min(
-    COST_PROFILES[profile].maxFanout,
-    ranked.length
-  );
-
-  return {
-    selected: ranked.slice(0, fanout).map((r) => r.provider),
-    ranked,
-    fanoutCount: fanout,
+function shouldEscalate(
+  current: ProviderLevel,
+  target: ProviderLevel
+): boolean {
+  const rank: Record<ProviderLevel, number> = {
+    econ: 0,
+    mid: 1,
+    max: 2,
   };
+  return rank[target] > rank[current];
+}
+
+// --------------------------------------------------
+// MAIN
+// --------------------------------------------------
+export function runRoutingEngine(control: ControlBlock): ProviderId[] {
+  const exec = control.execution;
+
+  // 🛑 Routing chiamato senza execution → nessuna chiamata
+  if (!exec) return [];
+
+  let tier: ProviderLevel = exec.preferredTier;
+  let escalationApplied = false;
+
+  // ------------------------------
+  // Escalation rules
+  // ------------------------------
+  if (exec.escalation.allowEscalation) {
+    // confidence-based
+    if (
+      shouldEscalate(tier, "mid") &&
+      confidenceRank[control.confidence_level] <
+        confidenceRank[exec.escalation.minConfidenceForMid]
+    ) {
+      tier = "mid";
+      escalationApplied = true;
+    }
+
+    if (
+      shouldEscalate(tier, "max") &&
+      confidenceRank[control.confidence_level] <
+        confidenceRank[exec.escalation.minConfidenceForMax]
+    ) {
+      tier = "max";
+      escalationApplied = true;
+    }
+
+    // hard rules
+    if (
+      exec.escalation.forceMidForOperative &&
+      control.request_type === "OPERATIVA" &&
+      shouldEscalate(tier, "mid")
+    ) {
+      tier = "mid";
+      escalationApplied = true;
+    }
+
+    if (
+      exec.escalation.forceMaxForHighRisk &&
+      control.context_requirements === "high" &&
+      shouldEscalate(tier, "max")
+    ) {
+      tier = "max";
+      escalationApplied = true;
+    }
+  }
+
+  // ------------------------------
+  // Provider selection
+  // ------------------------------
+  const allowed = exec.providersByTier[tier] ?? [];
+  if (allowed.length === 0) return [];
+
+  const fanout = Math.min(exec.maxFanout, allowed.length);
+
+  // 🔹 Nota: qui puoi randomizzare o ruotare in futuro
+  return allowed.slice(0, fanout);
 }

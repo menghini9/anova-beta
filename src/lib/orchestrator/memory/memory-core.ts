@@ -17,10 +17,12 @@ export interface MemoryContext {
  */
 export async function initMemoryEngine(
   prompt: string,
-  intent: Intent,
+  intent?: any, // oppure: Intent | null se vuoi tipizzare bene
   userId?: string
 ): Promise<MemoryContext> {
-  updateSessionMemory(prompt, intent.purpose);
+ const purpose = intent?.purpose ?? "logic";
+updateSessionMemory(prompt, purpose);
+
   const session = getSessionMemory();
   const user = userId ? await loadUserMemory(userId) : undefined;
 
