@@ -1,7 +1,7 @@
 // ANOVA_CONTROL_ADAPTER_V2
-// Traduce l’output del Manifesto nel ControlBlock interno di ANOVA
-// Nessuna interpretazione semantica: solo mapping + completamento campi obbligatori.
+// Traduce ManifestoOutput -> ControlBlock (con execution obbligatorio)
 
+import type { ProviderId } from "../types";
 import type {
   ControlBlock,
   RequestType,
@@ -13,15 +13,9 @@ import type {
   ExecutionPolicy,
 } from "./control-block";
 
-import type { ProviderId } from "../types";
-
-/* ------------------------------------------
- * Tipi input (dal Manifesto)
- * ------------------------------------------ */
-
 export interface ManifestoOutput {
   category: "INFORMATIVE" | "OPERATIVE" | "DEBUG" | "DECISIONAL" | "PREFERENCES";
-  confidence?: number; // 0.0 - 1.0
+  confidence?: number; // 0..1
   phaseNext:
     | "UNDERSTAND"
     | "CHECKLIST"
@@ -32,42 +26,46 @@ export interface ManifestoOutput {
     | "DONE";
   needsUserInput?: boolean;
   questions?: string[];
-  checklist?: Array<{
-    title: string;
-    items: string[];
-    priority?: "P1" | "P2" | "P3";
-  }>;
+  checklist?: Array<{ title: string; items: string[]; priority?: "P1" | "P2" | "P3" }>;
   superPrompt?: string;
   finalAnswer?: string;
   notesForOrchestrator?: string[];
 }
 
-/* ------------------------------------------
- * Mapping helpers
- * ------------------------------------------ */
+export interface AdaptedControlResult {
+  control: ControlBlock;
+  payload: {
+    superPrompt?: string;
+    finalAnswer?: string;
+    notesForOrchestrator?: string[];
+  };
+}
+
+const isNonEmpty = (x: any) => typeof x === "string" && x.trim().length > 0;
 
 function mapCategory(cat: ManifestoOutput["category"]): RequestType {
   switch (cat) {
-    case "INFORMATIVE":
-      return "INFORMATIVA";
-    case "OPERATIVE":
-      return "OPERATIVA";
-    case "DEBUG":
-      return "TRASFORMATIVA";
-    case "DECISIONAL":
-      return "DECISIONALE";
-    case "PREFERENCES":
-      return "DIALOGICA";
-    default:
-      return "INFORMATIVA";
+    case "INFORMATIVE": return "INFORMATIVA";
+    case "OPERATIVE": return "OPERATIVA";
+    case "DEBUG": return "TRASFORMATIVA";
+    case "DECISIONAL": return "DECISIONALE";
+    case "PREFERENCES": return "DIALOGICA";
+    default: return "INFORMATIVA";
   }
+}
+
+function mapConfidence(conf?: number): ConfidenceLevel {
+  if (conf === undefined) return "medium";
+  if (conf >= 0.75) return "high";
+  if (conf >= 0.4) return "medium";
+  return "low";
 }
 
 function mapPhaseToStage(phase: ManifestoOutput["phaseNext"]): RequestStage {
   switch (phase) {
+    case "CLARIFY":
     case "UNDERSTAND":
     case "CHECKLIST":
-    case "CLARIFY":
       return "CLARIFICATION";
     case "SUPERPROMPT":
       return "READY_FOR_EXEC";
@@ -82,79 +80,40 @@ function mapPhaseToStage(phase: ManifestoOutput["phaseNext"]): RequestStage {
 }
 
 function mapPhaseToNextAction(
-  phase: ManifestoOutput["phaseNext"]
+  phase: ManifestoOutput["phaseNext"],
+  hasSuperPrompt: boolean,
+  hasFinalAnswer: boolean
 ): NextAction {
+  if (hasFinalAnswer && !hasSuperPrompt) return "REFINE_OUTPUT";
   switch (phase) {
-    case "UNDERSTAND":
     case "CLARIFY":
-      return "ASK_USER";
-    case "CHECKLIST":
-      return "GENERATE_CHECKLIST";
-    case "SUPERPROMPT":
-      return "GENERATE_SUPER_PROMPT";
-    case "EXECUTE":
-      return "EXECUTE_TASK";
+    case "UNDERSTAND": return "ASK_USER";
+    case "CHECKLIST": return "GENERATE_CHECKLIST";
+    case "SUPERPROMPT": return "GENERATE_SUPER_PROMPT";
+    case "EXECUTE": return "EXECUTE_TASK";
     case "REFINE":
-    case "DONE":
-      return "REFINE_OUTPUT";
-    default:
-      return "ASK_USER";
+    case "DONE": return "REFINE_OUTPUT";
+    default: return "ASK_USER";
   }
 }
 
-function mapConfidence(conf?: number): ConfidenceLevel {
-  if (conf === undefined) return "medium";
-  if (conf >= 0.75) return "high";
-  if (conf >= 0.4) return "medium";
-  return "low";
+function suggestTier(category: ManifestoOutput["category"], conf: ConfidenceLevel): ProviderLevel {
+  if (category === "INFORMATIVE" || category === "PREFERENCES") return "econ";
+  if (category === "OPERATIVE" || category === "DECISIONAL") return conf === "high" ? "mid" : "econ";
+  return "econ";
 }
 
-function suggestProviderLevel(
-  category: ManifestoOutput["category"],
-  confidence: ConfidenceLevel
-): ProviderLevel {
-  if (category === "INFORMATIVE" || category === "PREFERENCES") {
-    return "econ";
-  }
-
-  if (category === "OPERATIVE" || category === "DECISIONAL") {
-    return confidence === "high" ? "mid" : "econ";
-  }
-
-  return "mid";
-}
-
-function mapContextRequirements(
-  category: ManifestoOutput["category"]
-): ContextRequirements {
-  switch (category) {
-    case "OPERATIVE":
-    case "DECISIONAL":
-      return "high";
-    case "DEBUG":
-      return "medium";
-    default:
-      return "low";
-  }
-}
-
-/* ------------------------------------------
- * Execution default (deterministico)
- * ------------------------------------------ */
-
-function buildDefaultExecutionPolicy(
-  providerLevel: ProviderLevel
-): ExecutionPolicy {
-  const byTier: Record<ProviderLevel, ProviderId[]> = {
-    econ: ["openai:econ", "anthropic:econ", "gemini:econ"],
-    mid: ["openai:mid", "anthropic:mid", "gemini:mid"],
-    max: ["openai:max", "anthropic:max", "gemini:max"],
+function buildExecutionPolicy(preferredTier: ProviderLevel): ExecutionPolicy {
+  const providersByTier: Record<ProviderLevel, ProviderId[]> = {
+    econ: ["openai:econ"],
+    mid: ["openai:mid"],
+    max: ["openai:max"],
   };
 
   return {
-    preferredTier: providerLevel,
-    maxFanout: 2,
-    providersByTier: byTier,
+    preferredTier,
+    maxFanout: 1,
+    providersByTier,
     escalation: {
       allowEscalation: true,
       minConfidenceForMid: "medium",
@@ -162,29 +121,22 @@ function buildDefaultExecutionPolicy(
       forceMidForOperative: true,
       forceMaxForHighRisk: false,
     },
+    notes: "default_exec_policy_openai_only",
   };
 }
 
-/* ------------------------------------------
- * MAIN ADAPTER
- * ------------------------------------------ */
-
-export function adaptManifestoToControlBlock(
-  manifesto: ManifestoOutput
-): ControlBlock {
+export function adaptManifestoToControlBlock(manifesto: ManifestoOutput): AdaptedControlResult {
   const confidenceLevel = mapConfidence(manifesto.confidence);
-  const nextAction = mapPhaseToNextAction(manifesto.phaseNext);
-  const suggestedLevel = suggestProviderLevel(
-    manifesto.category,
-    confidenceLevel
-  );
+
+  const hasSuperPrompt = isNonEmpty(manifesto.superPrompt);
+  const hasFinalAnswer = isNonEmpty(manifesto.finalAnswer);
+
+  const tier = suggestTier(manifesto.category, confidenceLevel);
 
   const control: ControlBlock = {
     request_type: mapCategory(manifesto.category),
     request_stage: mapPhaseToStage(manifesto.phaseNext),
-
-    clarity_status:
-      manifesto.needsUserInput === false ? "CLEAR" : "PARTIALLY_CLEAR",
+    clarity_status: manifesto.needsUserInput === false ? "CLEAR" : "PARTIALLY_CLEAR",
 
     checklist:
       manifesto.checklist?.flatMap((c) =>
@@ -197,20 +149,25 @@ export function adaptManifestoToControlBlock(
 
     missing_information: manifesto.questions ?? [],
 
-    user_input_sufficiency:
-      manifesto.needsUserInput === false ? "SUFFICIENT" : "INSUFFICIENT",
+    user_input_sufficiency: manifesto.needsUserInput === false ? "SUFFICIENT" : "INSUFFICIENT",
+    next_action: mapPhaseToNextAction(manifesto.phaseNext, hasSuperPrompt, hasFinalAnswer),
 
-    next_action: nextAction,
-
-    suggested_provider_level: suggestedLevel,
+    suggested_provider_level: tier,
     confidence_level: confidenceLevel,
-    context_requirements: mapContextRequirements(manifesto.category),
+    context_requirements: manifesto.category === "OPERATIVE" ? "high" : "medium",
+
+    // ✅ fondamentale: senza questo il validator boccia
+    execution: buildExecutionPolicy(tier),
+
+    memory_update: undefined,
   };
 
-  // 🔹 Execution SOLO se serve davvero
-  if (nextAction === "EXECUTE_TASK") {
-    control.execution = buildDefaultExecutionPolicy(suggestedLevel);
-  }
-
-  return control;
+  return {
+    control,
+    payload: {
+      superPrompt: manifesto.superPrompt,
+      finalAnswer: manifesto.finalAnswer,
+      notesForOrchestrator: manifesto.notesForOrchestrator,
+    },
+  };
 }

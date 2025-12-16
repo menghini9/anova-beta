@@ -8,6 +8,8 @@ import type {
   ChecklistItem,
 } from "./control-block";
 
+import { adaptManifestoToControlBlock, type ManifestoOutput } from "./control-adapter";
+
 import type { ProviderId } from "../types";
 
 // --------------------------------------------------
@@ -154,44 +156,71 @@ function validateControlBlock(c: unknown): c is ControlBlock {
 }
 
 // --------------------------------------------------
-// PARSE + VALIDATE
+// PARSE + VALIDATE (+ ADAPT SE SERVE)
 // --------------------------------------------------
 export function parseAndValidateControl(
   rawText: string
 ): ValidationOk | ValidationFail {
-  let obj: unknown;
+  let obj: any;
 
   try {
     obj = JSON.parse(rawText);
   } catch {
     return {
       ok: false,
-      error: "CONTROL non è JSON valido",
+      error: "CONTROL non è JSON valido (JSON.parse fallito)",
       raw: rawText,
     };
   }
 
-  if (
-    !obj ||
-    typeof obj !== "object" ||
-    !("CONTROL" in obj)
-  ) {
+  if (!obj || typeof obj !== "object" || !obj.CONTROL) {
     return {
       ok: false,
-      error: "Chiave CONTROL mancante",
+      error: "CONTROL mancante (chiave CONTROL assente)",
       raw: obj,
     };
   }
 
-  const control = (obj as any).CONTROL;
+  const maybeControl = obj.CONTROL;
 
-  if (!validateControlBlock(control)) {
+  // 1) Caso A: l'AI ha già prodotto direttamente il ControlBlock (schema V2/V3)
+  if (validateControlBlock(maybeControl)) {
+    return { ok: true, value: obj as ControlWrappedOutput };
+  }
+
+  // 2) Caso B: l'AI ha prodotto ManifestoOutput (category/phaseNext/...)
+  const looksLikeManifesto =
+    maybeControl &&
+    typeof maybeControl === "object" &&
+    typeof maybeControl.category === "string" &&
+    typeof maybeControl.phaseNext === "string";
+
+  if (!looksLikeManifesto) {
     return {
       ok: false,
-      error: "CONTROL presente ma non conforme allo schema V3",
+      error: "CONTROL presente ma formato sconosciuto (né ControlBlock né ManifestoOutput)",
       raw: obj,
     };
   }
 
-  return { ok: true, value: obj as ControlWrappedOutput };
+  const adapted = adaptManifestoToControlBlock(maybeControl as ManifestoOutput);
+console.log("🧱 ADAPTED CONTROL:", JSON.stringify(adapted.control, null, 2));
+console.log("🧱 ADAPTED PAYLOAD:", JSON.stringify(adapted.payload, null, 2));
+
+  if (!validateControlBlock(adapted.control)) {
+ return {
+  ok: false,
+  error: "CONTROL adattato ma ancora non conforme (vedi log 🧱 ADAPTED CONTROL)",
+  raw: { original: obj, adapted: adapted.control },
+};
+
+  }
+
+  const wrapped: ControlWrappedOutput = {
+    CONTROL: adapted.control,
+    payload: adapted.payload,
+  };
+
+  return { ok: true, value: wrapped };
 }
+

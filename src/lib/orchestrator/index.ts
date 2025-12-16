@@ -1,6 +1,8 @@
-// ANOVA_ORCHESTRATOR_CORE_V4
-// Orchestratore manifesto-driven.
-// ANOVA non interpreta contenuti: orchestra, valida, route, fonde.
+// ======================================================
+// ANOVA_ORCHESTRATOR_CORE_V5
+// Path: /src/lib/orchestrator/index.ts
+// Orchestratore manifesto-driven: orchestra, valida, route, fonde.
+// ======================================================
 
 import type {
   FusionResult,
@@ -12,10 +14,7 @@ import type {
 // =========================
 // MEMORY
 // =========================
-import {
-  initMemoryEngine,
-  persistMemoryEngine,
-} from "./memory/memory-core";
+import { initMemoryEngine, persistMemoryEngine } from "./memory/memory-core";
 
 // =========================
 // MANIFEST & CONTROL
@@ -50,83 +49,89 @@ import {
   invokeGeminiPremium,
 } from "../providers/gemini";
 
-// =========================
+// ======================================================
+// CONFIG (cost control)
+// ======================================================
+const DEBUG = process.env.ANOVA_DEBUG === "1";
+const ALLOW_CONTROL_FINAL_ANSWER = process.env.ANOVA_ALLOW_CONTROL_FINAL_ANSWER !== "0";
+
+// Provider disponibili REALI (per ora: solo OpenAI finché stabilizziamo)
+const AVAILABLE_PROVIDERS: ProviderId[] = ["openai:econ", "openai:mid", "openai:max"];
+
+// ======================================================
 // PROVIDER EXECUTOR
-// =========================
+// ======================================================
 async function executeProviders(
   providers: ProviderId[],
   prompt: string
 ): Promise<ProviderResponse[]> {
   const calls: Promise<ProviderResponse>[] = [];
 
-for (const p of providers) {
-  try {
-    switch (p) {
-      case "openai:econ":
-        calls.push(invokeOpenAIEconomic(prompt));
-        break;
-      case "openai:mid":
-        calls.push(invokeOpenAIBalanced(prompt));
-        break;
-      case "openai:max":
-        calls.push(invokeOpenAIPremium(prompt));
-        break;
+  for (const p of providers) {
+    try {
+      switch (p) {
+        case "openai:econ":
+          calls.push(invokeOpenAIEconomic(prompt));
+          break;
+        case "openai:mid":
+          calls.push(invokeOpenAIBalanced(prompt));
+          break;
+        case "openai:max":
+          calls.push(invokeOpenAIPremium(prompt));
+          break;
 
-      case "anthropic:econ":
-        calls.push(invokeAnthropicEconomic(prompt));
-        break;
-      case "anthropic:mid":
-        calls.push(invokeAnthropicBalanced(prompt));
-        break;
-      case "anthropic:max":
-        calls.push(invokeAnthropicPremium(prompt));
-        break;
+        case "anthropic:econ":
+          calls.push(invokeAnthropicEconomic(prompt));
+          break;
+        case "anthropic:mid":
+          calls.push(invokeAnthropicBalanced(prompt));
+          break;
+        case "anthropic:max":
+          calls.push(invokeAnthropicPremium(prompt));
+          break;
 
-      case "gemini:econ":
-        calls.push(invokeGeminiEconomic(prompt));
-        break;
-      case "gemini:mid":
-        calls.push(invokeGeminiBalanced(prompt));
-        break;
-      case "gemini:max":
-        calls.push(invokeGeminiPremium(prompt));
-        break;
+        case "gemini:econ":
+          calls.push(invokeGeminiEconomic(prompt));
+          break;
+        case "gemini:mid":
+          calls.push(invokeGeminiBalanced(prompt));
+          break;
+        case "gemini:max":
+          calls.push(invokeGeminiPremium(prompt));
+          break;
 
-      default:
-        // Provider non gestito → fallimento controllato
-        calls.push(
-          Promise.resolve({
-            provider: p,
-            text: "",
-            success: false,
-            error: "provider_not_supported",
-            latencyMs: 0,
-            tokensUsed: 0,
-            promptTokens: 0,
-            completionTokens: 0,
-            estimatedCost: 0,
-          })
-        );
-        break;
+        default:
+          calls.push(
+            Promise.resolve({
+              provider: p,
+              text: "",
+              success: false,
+              error: "provider_not_supported",
+              latencyMs: 0,
+              tokensUsed: 0,
+              promptTokens: 0,
+              completionTokens: 0,
+              estimatedCost: 0,
+            })
+          );
+          break;
+      }
+    } catch (e: any) {
+      calls.push(
+        Promise.resolve({
+          provider: p,
+          text: "",
+          success: false,
+          error: e?.message ?? "provider_failure",
+          latencyMs: 0,
+          tokensUsed: 0,
+          promptTokens: 0,
+          completionTokens: 0,
+          estimatedCost: 0,
+        })
+      );
     }
-  } catch (e: any) {
-    // 🔒 Se il provider lancia errori SINCRONI (es. API key mancante), non facciamo 500
-    calls.push(
-      Promise.resolve({
-        provider: p,
-        text: "",
-        success: false,
-        error: e?.message ?? "provider_failure",
-        latencyMs: 0,
-        tokensUsed: 0,
-        promptTokens: 0,
-        completionTokens: 0,
-        estimatedCost: 0,
-      })
-    );
   }
-}
-
 
   return Promise.all(
     calls.map((c, i) =>
@@ -145,6 +150,44 @@ for (const p of providers) {
   );
 }
 
+// ======================================================
+// HELPERS
+// ======================================================
+function safeJsonParse(text: string): any | null {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
+}
+
+function extractPayload(parsed: any): { superPrompt?: string; finalAnswer?: string } | null {
+  if (!parsed || typeof parsed !== "object") return null;
+
+  // Nuovo schema (Manifesto V2)
+  const payload = parsed.payload && typeof parsed.payload === "object" ? parsed.payload : null;
+
+  // Compat legacy: alcuni modelli sputano finalAnswer/superPrompt dentro CONTROL
+  const legacy = parsed.CONTROL && typeof parsed.CONTROL === "object" ? parsed.CONTROL : null;
+
+  const finalAnswer =
+    (typeof payload?.finalAnswer === "string" ? payload.finalAnswer : "") ||
+    (typeof legacy?.finalAnswer === "string" ? legacy.finalAnswer : "");
+
+  const superPrompt =
+    (typeof payload?.superPrompt === "string" ? payload.superPrompt : "") ||
+    (typeof legacy?.superPrompt === "string" ? legacy.superPrompt : "");
+
+  return {
+    finalAnswer: finalAnswer?.trim() ? finalAnswer.trim() : undefined,
+    superPrompt: superPrompt?.trim() ? superPrompt.trim() : undefined,
+  };
+}
+
+function sumCost(rows: ProviderResponse[]): number {
+  return rows.reduce((a, r) => a + (r.estimatedCost ?? 0), 0);
+}
+
 // =========================
 // CORE API
 // =========================
@@ -158,75 +201,49 @@ export async function getAIResponse(
   costThisRequest: number;
 }> {
   // --------------------------------------------------
-  // 1️⃣ INIT MEMORY (NO INTENT)
+  // 1) INIT MEMORY
   // --------------------------------------------------
-const { session: sessionMemory } = await initMemoryEngine(
-  userInput,
-  null,
-  userId
-);
-
-
+  let sessionMemory: any;
+  try {
+    const init = await initMemoryEngine(userInput, null as any, userId);
+    sessionMemory = init.session;
+  } catch (e: any) {
+    // fallback “no-crash”: meglio una memoria vuota che un 500
+    sessionMemory = { context: {} };
+    if (DEBUG) console.error("❌ initMemoryEngine failed:", e?.message ?? e);
+  }
 
   // --------------------------------------------------
-  // 2️⃣ CONTROL PROMPT (MANIFESTO)
+  // 2) CONTROL PROMPT (LEAN)
   // --------------------------------------------------
-  const controlPrompt = `
-${ANOVA_MANIFESTO_TEXT}
+  const ctx = sessionMemory?.context ?? {};
+  const ctxStr = JSON.stringify(ctx, null, 2);
+
+  const controlPrompt = `${ANOVA_MANIFESTO_TEXT}
 
 --- CONTEXT ---
-${JSON.stringify(sessionMemory.context ?? {}, null, 2)}
+${ctxStr}
 
 --- USER INPUT ---
 "${userInput}"
 
-Rispondi ESCLUSIVAMENTE in JSON valido con chiave CONTROL.
+Rispondi SOLO JSON valido con root { "CONTROL": ..., "payload": ... }.
 `;
 
   // --------------------------------------------------
-  // 3️⃣ CONTROL PHASE — ECON PROVIDERS
+  // 3) CONTROL PHASE (OPENAI ECON)
   // --------------------------------------------------
-  const controlProviders: ProviderId[] = [
-    "openai:econ",
-   // "anthropic:econ",
-   // "gemini:econ",
-  ];
-
+  const controlProviders: ProviderId[] = ["openai:econ"];
   const controlRaw = await executeProviders(controlProviders, controlPrompt);
 
+  // Se hai 1 provider, il “fusion” qui è solo una formalità
   const { fusion: controlFusion } = runFusionEngine(controlRaw, "logic");
-console.log("📦 CONTROL RAW TEXT (fusion.finalText):", controlFusion.finalText);
-console.log("📦 CONTROL RAW PROVIDERS:", controlRaw.map(r => ({ p: r.provider, ok: r.success, err: r.error })));
+  const controlText = (controlFusion.finalText ?? "").trim();
 
-const parsed = parseAndValidateControl(controlFusion.finalText);
-
-if (!parsed.ok) {
-  console.error("❌ CONTROL VALIDATION FAILED:", parsed.error);
-  console.error("❌ CONTROL RAW TEXT:", controlFusion.finalText);
-
-  // ✅ Fallback pulito (no 500) — risposta diretta all'utente
-  return {
-    fusion: {
-      finalText:
-        "⚠️ Nessuna risposta utile dall’orchestratore (CONTROL non valido). Riprova o riformula la richiesta.",
-      fusionScore: 0,
-      used: [],
-    },
-    raw: controlRaw,
-    meta: {
-      memory: sessionMemory,
-      stats: {
-        callsThisRequest: controlRaw.length,
-        providersRequested: controlProviders,
-      },
-      tags: { control_valid: false },
-    },
-    costThisRequest: controlRaw.reduce((a, r) => a + (r.estimatedCost ?? 0), 0),
-  };
-}
-
-
-  const control = parsed.value.CONTROL;
+  if (DEBUG) {
+    console.log("📦 CONTROL RAW PROVIDERS:", controlRaw.map(r => ({ p: r.provider, ok: r.success, err: r.error })));
+    console.log("📦 CONTROL RAW TEXT:", controlText);
+  }
 
   const baseStats = {
     callsThisRequest: controlRaw.length,
@@ -234,61 +251,115 @@ if (!parsed.ok) {
   };
 
   // --------------------------------------------------
-  // 4️⃣ CLARIFICATION → DOMANDE UTENTE
+  // 3.1) VALIDATION (NO EXECUTION IF INVALID)
   // --------------------------------------------------
-  if (control.request_stage === "CLARIFICATION") {
+  const parsed = parseAndValidateControl(controlText);
+
+  if (!parsed.ok) {
+    // Se lo schema non torna, NON lanciamo execution (stop costi inutili).
+    // Proviamo comunque a “salvare” una risposta se esiste nel payload.
+    const loose = safeJsonParse(controlText);
+    const rescued = extractPayload(loose);
+
+    if (rescued?.finalAnswer && ALLOW_CONTROL_FINAL_ANSWER) {
+      return {
+        fusion: { finalText: rescued.finalAnswer, fusionScore: 0.7, used: [] },
+        raw: controlRaw,
+        meta: { memory: sessionMemory, stats: baseStats, tags: { control_valid: false, rescued_answer: true } },
+        costThisRequest: sumCost(controlRaw),
+      };
+    }
+
     return {
       fusion: {
-        finalText: control.missing_information.join("\n"),
-        fusionScore: 1,
+        finalText: "⚠️ CONTROL non valido: stop esecuzione per evitare costi. Riprova o riformula la richiesta.",
+        fusionScore: 0,
         used: [],
       },
       raw: controlRaw,
-      meta: {
-        memory: sessionMemory,
-        stats: baseStats,
-      },
-      costThisRequest: controlRaw.reduce(
-        (a, r) => a + (r.estimatedCost ?? 0),
-        0
-      ),
+      meta: { memory: sessionMemory, stats: baseStats, tags: { control_valid: false } },
+      costThisRequest: sumCost(controlRaw),
     };
   }
-// --------------------------------------------------
-// 5️⃣ EXECUTION PHASE
-// --------------------------------------------------
-const executionProviders = runRoutingEngine(control).filter((p) =>
-  p.startsWith("openai:")
-);
 
-console.log("🧭 ROUTING — selected providers:", executionProviders);
+  const control = parsed.value.CONTROL;
+  const payload = (parsed.value as any).payload ?? null;
+  const extracted = extractPayload({ CONTROL: control, payload });
 
-// fallback se routing torna vuoto
-const safeExecutionProviders: ProviderId[] =
-  executionProviders.length > 0 ? executionProviders : ["openai:mid"];
+  // --------------------------------------------------
+  // 4) CLARIFICATION
+  // --------------------------------------------------
+  if (control.request_stage === "CLARIFICATION" || control.next_action === "ASK_USER") {
+    const questions = Array.isArray(control.missing_information) && control.missing_information.length > 0
+      ? control.missing_information
+      : ["Specifica meglio cosa ti serve (obiettivo, vincoli, formato output)."];
 
-const executionPrompt = controlFusion.finalText;
+    return {
+      fusion: { finalText: questions.join("\n"), fusionScore: 1, used: [] },
+      raw: controlRaw,
+      meta: { memory: sessionMemory, stats: baseStats, tags: { stage: "clarification" } },
+      costThisRequest: sumCost(controlRaw),
+    };
+  }
 
-console.log("🧾 EXEC PROMPT length:", executionPrompt.length);
-console.log("🧾 EXEC PROMPT preview:", executionPrompt.slice(0, 400));
+  // --------------------------------------------------
+  // 4.1) DIRECT ANSWER FROM CONTROL (cheap mode)
+  // --------------------------------------------------
+  if (ALLOW_CONTROL_FINAL_ANSWER && extracted?.finalAnswer && !extracted?.superPrompt) {
+    return {
+      fusion: { finalText: extracted.finalAnswer, fusionScore: 1, used: [] },
+      raw: controlRaw,
+      meta: { memory: sessionMemory, stats: baseStats, tags: { stage: "direct_from_control" } },
+      costThisRequest: sumCost(controlRaw),
+    };
+  }
 
-const executionRaw = await executeProviders(
-  safeExecutionProviders,
-  executionPrompt
-);
+  // --------------------------------------------------
+  // 5) EXECUTION (ONLY IF superPrompt EXISTS)
+  // --------------------------------------------------
+  const superPrompt = extracted?.superPrompt;
 
-console.log(
-  "🏭 EXEC RAW:",
-  executionRaw.map((r) => ({
-    p: r.provider,
-    ok: r.success,
-    t: (r.text ?? "").slice(0, 120),
-    err: r.error,
-    cost: r.estimatedCost ?? 0,
-  }))
-);
+  if (!superPrompt) {
+    // Regola d’acciaio: niente superPrompt = niente execution (altrimenti bruci token per prompt “spazzatura”)
+    return {
+      fusion: {
+        finalText: "⚠️ CONTROL valido ma superPrompt mancante: esecuzione bloccata per evitare costi inutili.",
+        fusionScore: 0,
+        used: [],
+      },
+      raw: controlRaw,
+      meta: { memory: sessionMemory, stats: baseStats, tags: { stage: "blocked_no_superprompt" } },
+      costThisRequest: sumCost(controlRaw),
+    };
+  }
 
+  // Routing deterministico basato sul ControlBlock + provider disponibili
+  const routing = runRoutingEngine(control, AVAILABLE_PROVIDERS);
+  const selected = routing.selected;
 
+  const safeExecutionProviders: ProviderId[] =
+    selected.length > 0 ? selected : ["openai:mid"]; // fallback “ragionevole”
+
+  if (DEBUG) {
+    console.log("🧭 ROUTING:", routing);
+    console.log("🧭 EXEC PROVIDERS:", safeExecutionProviders);
+    console.log("🧾 EXEC superPrompt length:", superPrompt.length);
+  }
+
+  const executionRaw = await executeProviders(safeExecutionProviders, superPrompt);
+
+  if (DEBUG) {
+    console.log(
+      "🏭 EXEC RAW:",
+      executionRaw.map((r) => ({
+        p: r.provider,
+        ok: r.success,
+        t: (r.text ?? "").slice(0, 120),
+        err: r.error,
+        cost: r.estimatedCost ?? 0,
+      }))
+    );
+  }
 
   const { fusion } = runFusionEngine(
     executionRaw,
@@ -296,26 +367,27 @@ console.log(
   );
 
   // --------------------------------------------------
-  // 6️⃣ MEMORY PERSIST
+  // 6) MEMORY PERSIST (safe)
   // --------------------------------------------------
   if (userId && control.memory_update) {
-    sessionMemory.context = {
-      ...(sessionMemory.context ?? {}),
-      ...Object.fromEntries(
-        control.memory_update.session?.map((x) => [x.key, x.value]) ?? []
-      ),
-    };
+    try {
+      sessionMemory.context = {
+        ...(sessionMemory.context ?? {}),
+        ...Object.fromEntries(
+          control.memory_update.session?.map((x: any) => [x.key, x.value]) ?? []
+        ),
+      };
 
-    await persistMemoryEngine(userId, sessionMemory);
+      await persistMemoryEngine(userId, sessionMemory);
+    } catch (e: any) {
+      if (DEBUG) console.error("❌ persistMemoryEngine failed:", e?.message ?? e);
+    }
   }
 
   // --------------------------------------------------
-  // 7️⃣ COST & META
+  // 7) COST & META
   // --------------------------------------------------
-  const costThisRequest = [...controlRaw, ...executionRaw].reduce(
-    (a, r) => a + (r.estimatedCost ?? 0),
-    0
-  );
+  const costThisRequest = sumCost([...controlRaw, ...executionRaw]);
 
   return {
     fusion,
@@ -323,9 +395,14 @@ console.log(
     meta: {
       memory: sessionMemory,
       stats: {
-        callsThisRequest:
-          controlRaw.length + executionRaw.length,
-        providersRequested: executionProviders,
+        callsThisRequest: controlRaw.length + executionRaw.length,
+        providersRequested: safeExecutionProviders,
+      },
+      tags: {
+        stage: "executed",
+        tierUsed: routing.tierUsed,
+        fanout: routing.fanoutCount,
+        escalationApplied: routing.escalationApplied,
       },
     },
     costThisRequest,
