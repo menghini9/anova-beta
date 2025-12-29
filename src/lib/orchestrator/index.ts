@@ -314,35 +314,68 @@ Rispondi SOLO JSON valido con root { "CONTROL": ..., "payload": ... }.
     };
   }
 
-  // --------------------------------------------------
+   // --------------------------------------------------
   // 5) EXECUTION (ONLY IF superPrompt EXISTS)
   // --------------------------------------------------
   const superPrompt = extracted?.superPrompt;
 
   if (!superPrompt) {
-    // Regola d’acciaio: niente superPrompt = niente execution (altrimenti bruci token per prompt “spazzatura”)
+    // Regola d’acciaio: niente superPrompt = niente execution
     return {
       fusion: {
-        finalText: "⚠️ CONTROL valido ma superPrompt mancante: esecuzione bloccata per evitare costi inutili.",
+        finalText:
+          "⚠️ CONTROL valido ma superPrompt mancante: esecuzione bloccata per evitare costi inutili.",
         fusionScore: 0,
         used: [],
       },
       raw: controlRaw,
-      meta: { memory: sessionMemory, stats: baseStats, tags: { stage: "blocked_no_superprompt" } },
+      meta: {
+        memory: sessionMemory,
+        stats: baseStats,
+        tags: { stage: "blocked_no_superprompt" },
+      },
       costThisRequest: sumCost(controlRaw),
     };
   }
 
-  // Routing deterministico basato sul ControlBlock + provider disponibili
-  const routing = runRoutingEngine(control, AVAILABLE_PROVIDERS);
-  const selected = routing.selected;
+  // ✅ ROUTING: runRoutingEngine ritorna ProviderId[]
+  const routedProviders: ProviderId[] = runRoutingEngine(control);
 
+  // ✅ Cost control: usa solo provider realmente disponibili (oggi: OpenAI)
+  const allowed = new Set<ProviderId>(AVAILABLE_PROVIDERS);
+  const filteredProviders: ProviderId[] = routedProviders.filter((p) => allowed.has(p));
+
+  // fallback “ragionevole”
   const safeExecutionProviders: ProviderId[] =
-    selected.length > 0 ? selected : ["openai:mid"]; // fallback “ragionevole”
+    filteredProviders.length > 0 ? filteredProviders : ["openai:mid"];
+
+  // ✅ routing meta derivata (per pannelli/costi)
+  const tierUsed: "econ" | "mid" | "max" =
+    safeExecutionProviders.some((p) => p.endsWith(":max"))
+      ? "max"
+      : safeExecutionProviders.some((p) => p.endsWith(":mid"))
+        ? "mid"
+        : "econ";
+
+  const fanoutCount = safeExecutionProviders.length;
+
+  const suggestedTier = (control as any)?.suggested_provider_level as
+    | "econ"
+    | "mid"
+    | "max"
+    | undefined;
+
+  const escalationApplied = suggestedTier ? tierUsed !== suggestedTier : false;
 
   if (DEBUG) {
-    console.log("🧭 ROUTING:", routing);
-    console.log("🧭 EXEC PROVIDERS:", safeExecutionProviders);
+    console.log("🧭 ROUTING providers:", routedProviders);
+    console.log("🏭 EXEC providers:", safeExecutionProviders);
+    console.log("📦 ROUTING meta:", {
+      tierUsed,
+      fanoutCount,
+      escalationApplied,
+      suggestedTier,
+    });
     console.log("🧾 EXEC superPrompt length:", superPrompt.length);
   }
 
@@ -400,9 +433,9 @@ Rispondi SOLO JSON valido con root { "CONTROL": ..., "payload": ... }.
       },
       tags: {
         stage: "executed",
-        tierUsed: routing.tierUsed,
-        fanout: routing.fanoutCount,
-        escalationApplied: routing.escalationApplied,
+        tierUsed,
+        fanout: fanoutCount,
+        escalationApplied,
       },
     },
     costThisRequest,

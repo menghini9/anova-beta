@@ -1,9 +1,15 @@
-
 "use client";
-// ⬇️ BLOCCO 3 — HomePage Beta (Full Screen Fix + Layout Integration)
-
+// ⬇️ BLOCCO 3 — HomePage (Chat Chiusa + 5 Scelte)
 
 import Link from "next/link";
+
+const INTENTS = [
+  { key: "scrittura", label: "SCRITTURA", desc: "testi, email, documenti, piani" },
+  { key: "riscrittura", label: "RISCRITTURA", desc: "sintesi, traduzione, miglioramento" },
+  { key: "problema", label: "PROBLEMA", desc: "bug, errori, diagnosi" },
+  { key: "decisione", label: "DECISIONE", desc: "opzioni, pro/contro, scelta" },
+  { key: "codice", label: "CODICE", desc: "sviluppo, integrazioni, automazioni" },
+];
 
 export default function HomePage() {
   return (
@@ -15,23 +21,32 @@ export default function HomePage() {
           <span className="text-neutral-500"> β</span>
         </h1>
         <p className="text-neutral-400 text-lg md:text-xl max-w-2xl mx-auto leading-relaxed">
-          Strumento di lavoro intelligente.  
-          Ponte diretto tra mente umana e intelligenze artificiali.  
-          Un solo ambiente, molteplici menti.
+          HOME — chat chiusa. <br />
+          Scegli il tipo di lavoro per aprire la pagina di lavoro e avviare il brief.
         </p>
       </div>
 
-      {/* 🔹 AREA PULSANTE CENTRALE */}
-      <div className="mt-10 flex gap-6">
-     <Link
-  href="/chat"
-  className="bg-white text-black hover:bg-neutral-200 active:bg-neutral-100 px-8 py-3 rounded-lg font-medium transition-colors shadow-md"
-  style={{ color: "#000" }}
->
-  Apri Chat
-</Link>
+      {/* 🔹 5 SCELTE */}
+      <div className="mt-10 w-full max-w-3xl px-6">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {INTENTS.map((i) => (
+            <Link
+              key={i.key}
+              href={`/work/${i.key}`}
+              className="group border border-neutral-800 bg-neutral-900/40 hover:bg-neutral-900 px-5 py-4 rounded-xl transition-colors text-left"
+            >
+              <div className="flex items-center justify-between">
+                <div className="text-base font-semibold tracking-wide">{i.label}</div>
+                <div className="text-neutral-500 group-hover:text-neutral-300 transition-colors">→</div>
+              </div>
+              <div className="text-neutral-400 text-sm mt-1">{i.desc}</div>
+            </Link>
+          ))}
+        </div>
 
-
+        <div className="text-neutral-500 text-xs mt-6">
+          Nota operativa: la chat si apre solo dopo i brief + conferme (poi “Open Chat” per contesto, poi Produzione).
+        </div>
       </div>
     </main>
   );
