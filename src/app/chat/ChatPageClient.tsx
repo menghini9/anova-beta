@@ -1,6 +1,7 @@
 "use client";
 // Path: src/app/chat/ChatPageClient.tsx
-import { useSearchParams } from "next/navigation";
+import { useSearchParams, useRouter } from "next/navigation";
+
 import type { ProjectDoc } from "@/lib/projects/types";
 
 import { useEffect, useRef, useState } from "react";
@@ -24,6 +25,8 @@ import { db, getUserId } from "@/lib/firebase";
 
 import type { AiUsage, ProviderKey } from "@/lib/orchestrator/types/ai";
 import { EMPTY_AI_USAGE } from "@/lib/orchestrator/types/ai";
+import type { ScritturaBreveBrief1 } from "@/lib/brief/scrittura/breve/brief1";
+import { buildScritturaBreveContractAll } from "@/lib/brief/scrittura/breve/brief2";
 
 import AICostPanel from "@/components/panels/AICostPanel";
 import FirestoreCostPanel from "@/components/panels/FirestoreCostPanel";
@@ -34,6 +37,7 @@ import ChatMessages from "./components/ChatMessages";
 import ChatInput from "./components/ChatInput";
 import ChatSidePanels from "./components/ChatSidePanels";
 import ChatOrchestratorSidebar from "./components/ChatOrchestratorSidebar";
+import { checkScritturaBreveCoherence } from "@/lib/brief/scrittura/breve/brief2";
 
 // ⬇️ ORA incolla qui sotto TUTTO il resto del tuo codice ChatPage
 
@@ -115,6 +119,11 @@ useEffect(() => {
 const searchParams = useSearchParams();
 const projectId = searchParams.get("projectId");
 const isProjectMode = !!projectId;
+const router = useRouter();
+
+const [showBriefSummary, setShowBriefSummary] = useState(false);
+const [mismatchWarning, setMismatchWarning] = useState<string | null>(null);
+
 
 const [project, setProject] = useState<(ProjectDoc & { id: string }) | null>(null);
 
@@ -569,6 +578,48 @@ const handleSend = async (e: FormEvent) => {
   e.preventDefault();
   const trimmed = input.trim();
   if (!trimmed || !sessionId) return;
+
+// ✅ COHERENCE GATE (NO-AI): prima di spendere 1 token
+if (isProjectMode && project) {
+  const b1 = ((project as any)?.brief?.round1 ?? {}) as any;
+  const b2 = (project as any)?.brief?.round2 ?? {};
+  const stage = String((project as any)?.stage ?? "");
+
+  const res = checkScritturaBreveCoherence({
+    brief1: b1,
+    brief2: b2,
+    userText: trimmed,
+  });
+
+  // HARD → stop totale (sempre)
+  if (res.verdict === "HARD_MISMATCH") {
+    setMismatchWarning(
+      `⚠️ Coerenza brief: ${res.reason}. ` +
+        `Allinea il brief (WORK) prima di andare avanti.`
+    );
+    setToastMessage("⛔ Richiesta bloccata: incoerenza col brief.");
+    setTimeout(() => setToastMessage(null), 1800);
+    return;
+  }
+
+  // SOFT → warning in OPEN_CHAT, blocco in PRODUCTION
+  if (res.verdict === "SOFT_MISMATCH") {
+    setMismatchWarning(
+      `⚠️ Coerenza brief (soft): ${res.reason}. ` +
+        `Se hai cambiato idea, premi “Modifica brief”.`
+    );
+
+    if (stage === "PRODUCTION") {
+      setToastMessage("⛔ Produzione bloccata: conferma/allinea il brief.");
+      setTimeout(() => setToastMessage(null), 1800);
+      return;
+    }
+  } else {
+    setMismatchWarning(null);
+  }
+}
+
+
   // ✅ Gating progetto: chat attiva solo in OPEN_CHAT o PRODUCTION
   if (isProjectMode) {
     const st = (project as any)?.stage;
@@ -625,9 +676,16 @@ body: JSON.stringify({
         intent: (project as any)?.intent,
         mode: (project as any)?.mode,
         stage: (project as any)?.stage,
+
+        // ✅ PASSO I DATI DEL BRIEF (fondamentale)
+        brief: {
+          round1: (project as any)?.brief?.round1 ?? null,
+          round2: (project as any)?.brief?.round2 ?? null,
+        },
       }
     : undefined,
 }),
+
 
 
 
@@ -750,35 +808,111 @@ body: JSON.stringify({
           width: showOrchestrator ? `calc(100vw - ${orchWidth}px)` : "100vw",
           marginRight: showOrchestrator ? `${orchWidth}px` : 0,
         }}>
-        {/* ⬇️ BLOCCO P2 — Project Banner */}
+{/* ⬇️ BLOCCO P2 — Project Banner (V2) */}
 {isProjectMode && project && (
-  <div className="border-b border-neutral-800 bg-neutral-950 px-6 py-3 text-sm flex items-center justify-between">
-    <div className="text-neutral-300">
-      Progetto: <b className="text-white">{(project as any).intent?.toUpperCase()}</b> — Mode:{" "}
-      <b className="text-white">{(project as any).mode?.toUpperCase()}</b> — Stage:{" "}
-      <b className="text-white">{(project as any).stage}</b>
+  <div className="border-b border-neutral-800 bg-neutral-950 px-6 py-3 text-sm">
+    <div className="flex items-center justify-between gap-3">
+      <div className="text-neutral-300">
+        Progetto: <b className="text-white">{(project as any).intent?.toUpperCase()}</b> — Mode:{" "}
+        <b className="text-white">{(project as any).mode?.toUpperCase()}</b> — Stage:{" "}
+        <b className="text-white">{(project as any).stage}</b>
+      </div>
+
+      <div className="flex items-center gap-2">
+        <button
+          className="border border-white/15 bg-white/0 hover:bg-white/5 px-3 py-1.5 rounded-lg font-medium transition"
+          onClick={() => setShowBriefSummary((v) => !v)}
+        >
+          {showBriefSummary ? "Nascondi brief" : "Mostra brief"}
+        </button>
+
+        <button
+          className="border border-white/15 bg-white/0 hover:bg-white/5 px-3 py-1.5 rounded-lg font-medium transition"
+          onClick={async () => {
+            if (!projectId) return;
+            await updateDoc(doc(db, "projects", projectId), {
+              stage: "BRIEF_1",
+              updatedAt: serverTimestamp(),
+            });
+            router.push(`/work/p/${projectId}`);
+          }}
+        >
+          Modifica brief
+        </button>
+
+        {(project as any).stage === "OPEN_CHAT" && (
+          <button
+            className="bg-white text-black px-3 py-1.5 rounded-lg font-medium hover:bg-neutral-200 transition"
+            style={{ color: "#000" }}
+            onClick={async () => {
+              if (!projectId) return;
+              await updateDoc(doc(db, "projects", projectId), {
+                stage: "PRODUCTION",
+                updatedAt: serverTimestamp(),
+              });
+              setToastMessage("✅ Produzione avviata");
+              setTimeout(() => setToastMessage(null), 1200);
+            }}
+          >
+            Avvia Produzione
+          </button>
+        )}
+      </div>
     </div>
 
-    {(project as any).stage === "OPEN_CHAT" && (
-      <button
-        className="bg-white text-black px-3 py-1.5 rounded-lg font-medium hover:bg-neutral-200 transition"
-        style={{ color: "#000" }}
-        onClick={async () => {
-          if (!projectId) return;
-          await updateDoc(doc(db, "projects", projectId), {
-            stage: "PRODUCTION",
-            updatedAt: serverTimestamp(),
-          });
-          setToastMessage("✅ Produzione avviata");
-          setTimeout(() => setToastMessage(null), 1200);
-        }}
-      >
-        Avvia Produzione
-      </button>
+    {/* ✅ Brief summary (solo Scrittura/Breve per ora) */}
+    {showBriefSummary &&
+      (project as any).intent === "scrittura" &&
+      (project as any).mode === "breve" && (
+        <div className="mt-3 rounded-xl border border-white/10 bg-black/30 p-3">
+          {buildScritturaBreveContractAll(
+            ((project as any)?.brief?.round1 ?? {}) as ScritturaBreveBrief1,
+            (project as any)?.brief?.round2 ?? {}
+          ).map((s) => (
+            <div key={s.title} className="mt-2 first:mt-0">
+              <div className="font-semibold text-white/90">{s.title}</div>
+              <ul className="list-disc ml-5 mt-1 text-white/70 space-y-0.5">
+                {s.lines.map((l) => (
+                  <li key={l}>{l}</li>
+                ))}
+              </ul>
+            </div>
+          ))}
+        </div>
+      )}
+
+    {/* ✅ Warning coerenza (soft) */}
+    {mismatchWarning && (
+      <div className="mt-3 rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 text-amber-200">
+        <div className="font-semibold">Coerenza brief</div>
+        <div className="text-sm mt-1">{mismatchWarning}</div>
+        <div className="mt-2 flex gap-2">
+          <button
+            className="bg-amber-300 text-black px-3 py-1.5 rounded-lg font-medium hover:bg-amber-200 transition"
+            onClick={async () => {
+              if (!projectId) return;
+              await updateDoc(doc(db, "projects", projectId), {
+                stage: "BRIEF_1",
+                updatedAt: serverTimestamp(),
+              });
+              router.push(`/work/p/${projectId}`);
+            }}
+          >
+            Aggiorna brief
+          </button>
+          <button
+            className="border border-amber-500/30 px-3 py-1.5 rounded-lg font-medium hover:bg-amber-500/10 transition"
+            onClick={() => setMismatchWarning(null)}
+          >
+            Ignora
+          </button>
+        </div>
+      </div>
     )}
   </div>
 )}
 {/* ⬆️ FINE BLOCCO P2 */}
+
 
       
         <ChatHeader
