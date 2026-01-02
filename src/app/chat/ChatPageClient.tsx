@@ -15,6 +15,9 @@ import {
   buildScritturaBreveContractAll,
   checkScritturaBreveCoherence,
 } from "@/lib/brief/scrittura/breve/brief2";
+import type { ScritturaBreveBrief3 } from "@/lib/brief/scrittura/breve/brief3";
+import { buildScritturaBreveBrief3Sections } from "@/lib/brief/scrittura/breve/brief3";
+
 
 import {
   collection,
@@ -98,6 +101,10 @@ export default function ChatPageClient() {
   const [debugInfo, setDebugInfo] = useState<any | null>(null);
   const [showOrchestrator, setShowOrchestrator] = useState(false);
   const [orchWidth, setOrchWidth] = useState(420);
+// =========================
+// AUTO-KICKOFF (anti doppio run)
+// =========================
+const [autoKickoffRunning, setAutoKickoffRunning] = useState(false);
 
   const bottomRef = useRef<HTMLDivElement | null>(null);
 
@@ -205,6 +212,105 @@ export default function ChatPageClient() {
       activeTitleUnsubRef.current = null;
     };
   }, [sessionId]);
+// =========================
+// AUTO-KICKOFF: primo output appena OPEN_CHAT dopo Brief3
+// =========================
+useEffect(() => {
+  if (!isProjectMode) return;
+  if (!projectId || !project) return;
+  if (!sessionId || !userId) return;
+
+  const stage = String((project as any)?.stage ?? "");
+  if (stage !== "OPEN_CHAT") return;
+
+  // Deve esistere Brief3 (round3)
+  const hasBrief3 = Boolean((project as any)?.brief?.round3);
+  if (!hasBrief3) return;
+
+  // Se ci sono già messaggi, non rifare kickoff
+  if (messages.length > 0) return;
+
+  // Evita doppio run per re-render
+  if (autoKickoffRunning) return;
+
+  // Evita loop su refresh / riapertura
+  if ((project as any)?.autoKickoffDone) return;
+
+  (async () => {
+    setAutoKickoffRunning(true);
+
+    try {
+      // 1) segna subito sul progetto (persistente)
+      await updateDoc(doc(db, "projects", projectId), {
+        autoKickoffDone: true,
+        updatedAt: serverTimestamp(),
+      });
+
+      // 2) chiama orchestrate con prompt kickoff
+      const kickoffPrompt =
+        "Genera subito una prima versione dell’output richiesto dal CONTRATTO. " +
+        "Se mancano dati davvero critici: fai domande numerate (max 3) e fermati.";
+
+      const res = await fetch("/api/orchestrate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          prompt: kickoffPrompt,
+          sessionId,
+          userId,
+          projectPacket: {
+            projectId,
+            intent: (project as any)?.intent,
+            mode: (project as any)?.mode,
+            stage: (project as any)?.stage,
+            brief: {
+              round1: (project as any)?.brief?.round1 ?? null,
+              round2: (project as any)?.brief?.round2 ?? null,
+              round3: (project as any)?.brief?.round3 ?? null,
+            },
+          },
+        }),
+      });
+
+      const data = await res.json();
+
+      // 3) aggiorna debug sidebar
+      setDebugInfo({
+        raw: data.raw || [],
+        meta: data.meta || {},
+      });
+
+      const aiResponse =
+        data?.fusion?.finalText || "⚠️ Nessuna risposta utile dall'orchestratore.";
+
+      // 4) salva messaggio anova (così è VISIBILE in chat)
+      const messagesRef = collection(db, "sessions", sessionId, "messages");
+      await addDoc(messagesRef, {
+        sender: "anova",
+        text: aiResponse,
+        createdAt: serverTimestamp(),
+        owner: userId,
+      });
+
+      await updateDoc(doc(db, "sessions", sessionId), {
+        updatedAt: serverTimestamp(),
+        lastMessage: aiResponse,
+      });
+    } catch (err) {
+      console.error("Auto-kickoff error:", err);
+    } finally {
+      setAutoKickoffRunning(false);
+    }
+  })();
+}, [
+  isProjectMode,
+  projectId,
+  project,
+  sessionId,
+  userId,
+  messages.length,
+  autoKickoffRunning,
+]);
 
   // autoscroll
   useEffect(() => {
@@ -342,10 +448,12 @@ if (isProjectMode && projectId && project) {
                 intent: (project as any)?.intent,
                 mode: (project as any)?.mode,
                 stage: (project as any)?.stage,
-                brief: {
-                  round1: (project as any)?.brief?.round1 ?? null,
-                  round2: (project as any)?.brief?.round2 ?? null,
-                },
+             brief: {
+  round1: (project as any)?.brief?.round1 ?? null,
+  round2: (project as any)?.brief?.round2 ?? null,
+  round3: (project as any)?.brief?.round3 ?? null, // ✅ NEW
+},
+
               }
             : undefined,
         }),
@@ -385,11 +493,17 @@ const contractSections =
   project &&
   (project as any).intent === "scrittura" &&
   (project as any).mode === "breve"
-    ? buildScritturaBreveContractAll(
-        ((project as any)?.brief?.round1 ?? {}) as ScritturaBreveBrief1,
-        (project as any)?.brief?.round2 ?? {}
-      )
+    ? [
+        ...buildScritturaBreveContractAll(
+          ((project as any)?.brief?.round1 ?? {}) as ScritturaBreveBrief1,
+          (project as any)?.brief?.round2 ?? {}
+        ),
+        ...buildScritturaBreveBrief3Sections(
+          ((project as any)?.brief?.round3 ?? {}) as ScritturaBreveBrief3
+        ),
+      ]
     : null;
+
 
   // -------------------------
   // 8) UI
@@ -464,10 +578,16 @@ const contractSections =
               (project as any).intent === "scrittura" &&
               (project as any).mode === "breve" && (
                 <div className="mt-3 rounded-xl border border-white/10 bg-black/30 p-3">
-                  {buildScritturaBreveContractAll(
-                    ((project as any)?.brief?.round1 ?? {}) as ScritturaBreveBrief1,
-                    (project as any)?.brief?.round2 ?? {}
-                  ).map((s) => (
+             {[
+  ...buildScritturaBreveContractAll(
+    ((project as any)?.brief?.round1 ?? {}) as ScritturaBreveBrief1,
+    (project as any)?.brief?.round2 ?? {}
+  ),
+  ...buildScritturaBreveBrief3Sections(
+    ((project as any)?.brief?.round3 ?? {}) as ScritturaBreveBrief3
+  ),
+].map((s) => (
+
                     <div key={s.title} className="mt-2 first:mt-0">
                       <div className="font-semibold text-white/90">{s.title}</div>
                       <ul className="list-disc ml-5 mt-1 text-white/70 space-y-0.5">

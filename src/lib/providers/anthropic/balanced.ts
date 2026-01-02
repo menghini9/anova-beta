@@ -1,6 +1,5 @@
 import { invokeBase } from "../_baseProvider";
 import type { ProviderResponse } from "../../orchestrator/types";
-import { PROVIDER_TIMEOUT_MS } from "../../../../_deprecated/lib/policy";
 
 export async function invokeAnthropicBalanced(prompt: string): Promise<ProviderResponse> {
   const key = process.env.ANTHROPIC_API_KEY;

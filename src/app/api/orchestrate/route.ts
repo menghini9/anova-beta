@@ -1,12 +1,13 @@
 // ======================================================
-// ANOVA — API ORCHESTRATE (V2 CLEAN + CONTRACT)
+// ANOVA — API ORCHESTRATE (V4 — SIMPLE FLOW + CONTRACT + BRIEF3)
 // Path: /src/app/api/orchestrate/route.ts
+//
 // Obiettivo:
-// - Sempre risposta
-// - Usa CONTRATTO derivato dai brief
-// - OPEN_CHAT: NO output finale, max 3 domande SOLO se mancano dati critici
-// - PRODUCTION: output finale (1 + 1 alternativa), max 1 domanda se manca dato critico
-// - Ritorna contractSections per sidebar orchestratore
+// - L’utente scrive -> AI risponde subito.
+// - Usa il CONTRATTO derivato dai brief (1, 2, 3).
+// - Max 3 domande SOLO se mancano dati critici (regola nel prompt, NO Brief4).
+// - Mai: “Contratto completo…”, mai: “Avvia Produzione”.
+// - Ritorna anche contractSections per sidebar orchestratore.
 // ======================================================
 
 import { NextResponse } from "next/server";
@@ -14,22 +15,26 @@ import { NextResponse } from "next/server";
 // ✅ Provider diretti (stabili)
 import { invokeOpenAIEconomic, invokeOpenAIBalanced } from "@/lib/providers/openai";
 
-// ✅ Contratto (server-side) — usa la TUA struttura reale: breve/index.ts
+// ✅ Contratto base (brief1 + brief2: tua struttura reale)
 import type { ScritturaBreveBrief1 } from "@/lib/brief/scrittura/breve/brief1";
 import { buildScritturaBreveContractAll } from "@/lib/brief/scrittura/breve/brief2";
 
+// ✅ Brief3 (file singolo coerente con la struttura)
+import type { ScritturaBreveBrief3 } from "@/lib/brief/scrittura/breve/brief3";
+import { buildScritturaBreveBrief3Sections } from "@/lib/brief/scrittura/breve/brief3";
 
-// ---------------------------
-// Tipi payload in ingresso
-// ---------------------------
+// -------------------------
+// Tipi payload
+// -------------------------
 type ProjectPacket = {
   projectId?: string;
   intent?: string;
-  mode?: string; // breve | guidato | ...
+  mode?: string;  // breve | guidato | ...
   stage?: string; // OPEN_CHAT | PRODUCTION | ...
   brief?: {
     round1?: unknown;
     round2?: unknown;
+    round3?: unknown; // ✅ NEW: brief3 (aperte)
   };
 };
 
@@ -47,25 +52,31 @@ type ProviderRow = {
   estimatedCost?: number;
 };
 
-// ---------------------------
-// Contract builders
-// ---------------------------
-function buildContractSections(brief1: unknown, brief2: unknown): ContractSection[] {
+// -------------------------
+// Contract builder (UI + Prompt)
+// -------------------------
+function buildContractSections(brief1: unknown, brief2: unknown, brief3: unknown): ContractSection[] {
   try {
-    const sections = buildScritturaBreveContractAll(
+    // 1) Base: Brief1 + Brief2 (legacy)
+    const base = buildScritturaBreveContractAll(
       (brief1 ?? {}) as ScritturaBreveBrief1,
       (brief2 ?? {}) as any
     ) as any;
 
-    return (Array.isArray(sections) ? sections : []).map((s: any) => ({
+    const baseSections: ContractSection[] = (Array.isArray(base) ? base : []).map((s: any) => ({
       title: String(s?.title ?? "Sezione"),
       lines: Array.isArray(s?.lines) ? s.lines.map((l: any) => String(l)) : [],
     }));
+
+    // 2) Extra: Brief3 (aperte)
+    const extra3 = buildScritturaBreveBrief3Sections((brief3 ?? {}) as ScritturaBreveBrief3);
+
+    return [...baseSections, ...extra3];
   } catch {
     return [
       {
         title: "BRIEF_JSON (fallback)",
-        lines: [JSON.stringify({ brief1, brief2 }, null, 2)],
+        lines: [JSON.stringify({ brief1, brief2, brief3 }, null, 2)],
       },
     ];
   }
@@ -80,94 +91,23 @@ function contractToText(sections: ContractSection[]): string {
     .join("\n\n");
 }
 
-// ---------------------------
-// Stage instruction
-// ---------------------------
+// -------------------------
+// Stage instruction (SIMPLE)
+// -------------------------
 function buildStageInstruction(stage?: string) {
-  if (stage === "OPEN_CHAT") {
-    return [
-      "=== STAGE: OPEN_CHAT (PRE-PRODUZIONE) ===",
-      "Scopo: validare/completare il CONTRATTO. NON consegnare l'output finale.",
-      "",
-      "REGOLE (OBBLIGATORIE):",
-      "- Il CONTRATTO è la fonte primaria: se un dato è nel contratto, NON chiederlo.",
-      "- La RICHIESTA UTENTE è contesto operativo: usala per personalizzare, senza rifare recap.",
-      "- Non fare recap del contratto (il contratto è mostrato in UI).",
-      "- Fai AL MASSIMO 3 domande e SOLO se mancano dati DAVVERO critici per produrre bene.",
-      "- Se non manca nulla: rispondi con UNA riga: '✅ Contratto completo. Pronto per PRODUCTION.'",
-      "- Se noti mismatch col contratto: fai 1 domanda secca (SI/NO) e fermati.",
-      "",
-      "FORMATO OUTPUT:",
-      "A) (Solo se necessario) Domande numerate (max 3)",
-      "B) Oppure: '✅ Contratto completo. Pronto per PRODUCTION.'",
-    ].join("\n");
-  }
-
-  if (stage === "PRODUCTION") {
-    return [
-      "=== STAGE: PRODUCTION ===",
-      "Scopo: consegnare l'output finale seguendo il CONTRATTO.",
-      "",
-      "REGOLE (OBBLIGATORIE):",
-      "- Se mode=breve: consegna 1 versione + 1 alternativa standard (subito).",
-      "- NON fare domande se la risposta è nel contratto.",
-      "- Se manca un dato critico: fai UNA domanda secca e fermati (niente output finché non risponde).",
-    ].join("\n");
-  }
-
   return [
-    "=== STAGE: GENERIC ===",
-    "Segui il contratto se presente e rispondi in modo utile.",
+    "=== REGOLE ANOVA (OBBLIGATORIE) ===",
+    "1) La RICHIESTA UTENTE è la priorità: usa parole e dettagli del prompt.",
+    "2) Il CONTRATTO è vincolante: se un dato è nel contratto, NON chiederlo.",
+    "3) Se mancano dati davvero critici per eseguire: fai domande numerate (max 3) e fermati.",
+    "4) Se NON mancano dati critici: produci direttamente l’output richiesto.",
+    "5) VIETATO: recap del contratto, '✅ Contratto completo', 'Avvia Produzione', o frasi da procedura.",
+    "6) Mantieni la risposta concreta e collegata al testo utente (cita 1–2 dettagli reali del prompt).",
+    "",
+    `Stage (solo contesto interno): ${stage ?? "n/a"}`,
   ].join("\n");
 }
 
-// ---------------------------
-// Prompt builder (ordine corretto)
-// ---------------------------
-function buildEffectivePrompt(args: {
-  projectId: string;
-  intent: string;
-  mode: string;
-  stage: string;
-  contractText: string;
-  stageInstruction: string;
-  userPrompt: string;
-}) {
-  const {
-    projectId,
-    intent,
-    mode,
-    stage,
-    contractText,
-    stageInstruction,
-    userPrompt,
-  } = args;
-
-  return [
-    "=== ANOVA — CONTESTO PROGETTO (NON COPIARE IN OUTPUT) ===",
-    `ProjectId: ${projectId}`,
-    `Intent: ${intent}`,
-    `Mode: ${mode}`,
-    `Stage: ${stage}`,
-    "",
-    "--- CONTRATTO (DA BRIEF) ---",
-    contractText,
-    "",
-    "=== PRIORITÀ INPUT (NON COPIARE IN OUTPUT) ===",
-    "1) CONTRATTO = specifica (forma + vincoli + contenuto deciso).",
-    "2) RICHIESTA UTENTE = contesto corrente: usala per personalizzare e scegliere cosa enfatizzare.",
-    "3) Se la richiesta utente CONTRADDICE il contratto: 1 domanda secca di allineamento, poi stop.",
-    "",
-    stageInstruction,
-    "",
-    "=== RICHIESTA UTENTE ===",
-    userPrompt,
-  ].join("\n");
-}
-
-// ======================================================
-// POST
-// ======================================================
 export async function POST(req: Request) {
   const t0 = Date.now();
 
@@ -180,36 +120,46 @@ export async function POST(req: Request) {
     };
 
     const prompt = typeof body.prompt === "string" ? body.prompt.trim() : "";
-    const projectPacket = body.projectPacket;
-
     if (!prompt) {
       return NextResponse.json({ error: "missing_prompt" }, { status: 400 });
     }
 
+    const projectPacket = body.projectPacket;
     const isProject = Boolean(projectPacket?.projectId);
-    const stage = String(projectPacket?.stage ?? "GENERIC");
-    const mode = String(projectPacket?.mode ?? "n/a");
+
+    const stage = (projectPacket?.stage ?? "GENERIC") as string;
+    const mode = (projectPacket?.mode ?? "n/a") as string;
 
     const brief1 = projectPacket?.brief?.round1 ?? null;
     const brief2 = projectPacket?.brief?.round2 ?? null;
+    const brief3 = projectPacket?.brief?.round3 ?? null;
 
-    const contractSections = isProject ? buildContractSections(brief1, brief2) : [];
+    const contractSections = isProject ? buildContractSections(brief1, brief2, brief3) : [];
     const contractText = isProject ? contractToText(contractSections) : "";
     const stageInstruction = isProject ? buildStageInstruction(stage) : "";
 
+    // ✅ Prompt completo: contratto + regole + richiesta utente
     const effectivePrompt = isProject
-      ? buildEffectivePrompt({
-          projectId: String(projectPacket?.projectId ?? "n/a"),
-          intent: String(projectPacket?.intent ?? "n/a"),
-          mode,
-          stage,
+      ? [
+          "=== ANOVA — CONTESTO PROGETTO (NON COPIARE IN OUTPUT) ===",
+          `ProjectId: ${projectPacket?.projectId ?? "n/a"}`,
+          `Intent: ${projectPacket?.intent ?? "n/a"}`,
+          `Mode: ${mode}`,
+          `Stage: ${stage}`,
+          "",
+          "--- CONTRATTO (DA BRIEF) ---",
           contractText,
+          "",
           stageInstruction,
-          userPrompt: prompt,
-        })
+          "",
+          "=== RICHIESTA UTENTE (QUESTA È LA PARTE PIÙ IMPORTANTE) ===",
+          prompt,
+        ]
+          .filter(Boolean)
+          .join("\n")
       : prompt;
 
-    // ✅ Provider: OPEN_CHAT economico, PRODUCTION più robusto
+    // ✅ Provider: in PRODUCTION usi balanced, altrimenti econ
     const out =
       isProject && stage === "PRODUCTION"
         ? await invokeOpenAIBalanced(effectivePrompt)
@@ -217,13 +167,10 @@ export async function POST(req: Request) {
 
     const latencyMs = out?.latencyMs ?? Date.now() - t0;
 
-    // ✅ ProviderId coerenti con la tua UI (openai:econ / openai:mid)
-    const fallbackProvider =
-      isProject && stage === "PRODUCTION" ? "openai:mid" : "openai:econ";
-
     const raw: ProviderRow[] = [
       {
-        provider: out?.provider ?? fallbackProvider,
+        provider:
+          out?.provider ?? (isProject && stage === "PRODUCTION" ? "openai:mid" : "openai:econ"),
         text: out?.text ?? "",
         success: out?.success ?? true,
         error: out?.error,
@@ -244,17 +191,15 @@ export async function POST(req: Request) {
         },
         raw,
         meta: {
-          // ✅ per sidebar orchestratore
           contract: {
-            sections: contractSections,
+            sections: contractSections, // ✅ sidebar orchestratore
           },
-          // ✅ contesto utile (debug UI)
           context: {
             projectId: projectPacket?.projectId ?? null,
             intent: projectPacket?.intent ?? null,
             mode,
             stage,
-            hasBrief: Boolean(brief1 || brief2),
+            hasBrief: Boolean(brief1 || brief2 || brief3),
             userId: body.userId ?? null,
             sessionId: body.sessionId ?? null,
           },
@@ -263,7 +208,7 @@ export async function POST(req: Request) {
             providersRequested: [raw[0].provider],
           },
           tags: {
-            api: "orchestrate_v2_clean",
+            api: "orchestrate_v4_contract_brief3",
             isProject,
           },
         },
@@ -273,9 +218,6 @@ export async function POST(req: Request) {
     );
   } catch (e: any) {
     console.error("[ANOVA] /api/orchestrate error:", e);
-    return NextResponse.json(
-      { error: e?.message ?? "server_error" },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: e?.message ?? "server_error" }, { status: 500 });
   }
 }
