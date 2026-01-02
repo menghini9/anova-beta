@@ -1,11 +1,20 @@
 "use client";
+// ======================================================
+// ChatPageClient — V6 (LEAN)
 // Path: src/app/chat/ChatPageClient.tsx
+// Obiettivo: Chat + Orchestratore. Stop Archivio/Cestino/Nuova Chat.
+// ======================================================
+
 import { useSearchParams, useRouter } from "next/navigation";
-
-import type { ProjectDoc } from "@/lib/projects/types";
-
 import { useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
+
+import type { ProjectDoc } from "@/lib/projects/types";
+import type { ScritturaBreveBrief1 } from "@/lib/brief/scrittura/breve/brief1";
+import {
+  buildScritturaBreveContractAll,
+  checkScritturaBreveCoherence,
+} from "@/lib/brief/scrittura/breve/brief2";
 
 import {
   collection,
@@ -18,33 +27,19 @@ import {
   setDoc,
   updateDoc,
   limit,
-  where,
 } from "firebase/firestore";
 
 import { db, getUserId } from "@/lib/firebase";
 
-import type { AiUsage, ProviderKey } from "@/lib/orchestrator/types/ai";
-import { EMPTY_AI_USAGE } from "@/lib/orchestrator/types/ai";
-import type { ScritturaBreveBrief1 } from "@/lib/brief/scrittura/breve/brief1";
-import { buildScritturaBreveContractAll } from "@/lib/brief/scrittura/breve/brief2";
-
-import AICostPanel from "@/components/panels/AICostPanel";
-import FirestoreCostPanel from "@/components/panels/FirestoreCostPanel";
-
-// ✅ fix path: niente "././"
+// UI
 import ChatHeader from "./components/ChatHeader";
 import ChatMessages from "./components/ChatMessages";
 import ChatInput from "./components/ChatInput";
-import ChatSidePanels from "./components/ChatSidePanels";
 import ChatOrchestratorSidebar from "./components/ChatOrchestratorSidebar";
-import { checkScritturaBreveCoherence } from "@/lib/brief/scrittura/breve/brief2";
 
-// ⬇️ ORA incolla qui sotto TUTTO il resto del tuo codice ChatPage
-
-
-/* ===========================
-   Tipi interni
-   =========================== */
+/* =========================
+   TIPI
+========================= */
 interface Message {
   id?: string;
   sender: "user" | "anova";
@@ -52,166 +47,68 @@ interface Message {
   createdAt?: any;
 }
 
-interface SessionMeta {
-  id: string;
-  title?: string | null;
-  createdAt?: any;
-  updatedAt?: any;
-  lastMessage?: string | null;
-  deleted?: boolean;
-}
-
-type SessionCache = {
-  [sid: string]: { messages: Message[]; title: string; ts: number };
-};
-
-/* ===========================
-   Helpers LocalStorage SSR-safe
-   =========================== */
+/* =========================
+   LOCAL STORAGE (SSR-safe)
+========================= */
 const hasWindow = () => typeof window !== "undefined";
 const safeGet = (k: string) => (hasWindow() ? window.localStorage.getItem(k) : null);
 const safeSet = (k: string, v: string) => {
   if (hasWindow()) window.localStorage.setItem(k, v);
 };
-const safeRemove = (k: string) => {
-  if (hasWindow()) window.localStorage.removeItem(k);
-};
 
-// Cache sessioni in memoria (per riaperture rapide)
-const CACHE_TTL_MS = 30_000;
+/* =========================
+   COMPONENT
+========================= */
+export default function ChatPageClient() {
+  // -------------------------
+  // 0) USER
+  // -------------------------
+  const [userId, setUserId] = useState<string | null>(null);
 
-// Chiave unica per uso AI
-const AI_USAGE_LS_KEY = "anovaAiUsageV1";
+  useEffect(() => {
+    getUserId().then(setUserId);
+  }, []);
 
-/* ===========================
-   Pagina Chat
-   =========================== */
-export default function ChatPage() {
-  // ⬇️ BLOCCO 15.1 — Carico UID anonimo
-const [userId, setUserId] = useState<string | null>(null);
+  // -------------------------
+  // 1) ROUTING / PROJECT MODE
+  // -------------------------
+  const searchParams = useSearchParams();
+  const router = useRouter();
 
-useEffect(() => {
-  getUserId().then((uid) => setUserId(uid));
-}, []);
-// ⬆️ FINE BLOCCO 15.1
+  const projectId = searchParams.get("projectId");
+  const isProjectMode = Boolean(projectId);
 
-  // Messaggi e input
-  const [messages, setMessages] = useState<Message[]>([]);
-  const [input, setInput] = useState("");
+  const [project, setProject] = useState<(ProjectDoc & { id: string }) | null>(null);
+  const [showBriefSummary, setShowBriefSummary] = useState(false);
+  const [mismatchWarning, setMismatchWarning] = useState<string | null>(null);
 
-  // Toast
-  const [toastMessage, setToastMessage] = useState<string | null>(null);
-
-  // Debug tecnico AI (orchestratore)
-  const [debugInfo, setDebugInfo] = useState<any | null>(null);
-
-  // Orchestratore laterale
-  const [showOrchestrator, setShowOrchestrator] = useState(false);
-  const [orchWidth, setOrchWidth] = useState(420); // larghezza iniziale sidebar
-
-  const bottomRef = useRef<HTMLDivElement | null>(null);
-
-  // Sessioni
+  // -------------------------
+  // 2) SESSION + UI CORE
+  // -------------------------
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [sessionTitle, setSessionTitle] = useState<string>("");
   const [editingTitle, setEditingTitle] = useState<boolean>(false);
-// ⬇️ BLOCCO P0 — Project Mode (query ?projectId=...)
-const searchParams = useSearchParams();
-const projectId = searchParams.get("projectId");
-const isProjectMode = !!projectId;
-const router = useRouter();
 
-const [showBriefSummary, setShowBriefSummary] = useState(false);
-const [mismatchWarning, setMismatchWarning] = useState<string | null>(null);
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [input, setInput] = useState("");
 
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
 
-const [project, setProject] = useState<(ProjectDoc & { id: string }) | null>(null);
+  // Orchestratore
+  const [debugInfo, setDebugInfo] = useState<any | null>(null);
+  const [showOrchestrator, setShowOrchestrator] = useState(false);
+  const [orchWidth, setOrchWidth] = useState(420);
 
-// in project mode, chiudo sempre eventuali pannelli archivio/cestino
-useEffect(() => {
-  if (!isProjectMode) return;
-  setShowArchive(false);
-  setShowTrash(false);
-}, [isProjectMode]);
-// ⬆️ FINE BLOCCO P0
+  const bottomRef = useRef<HTMLDivElement | null>(null);
 
-  const [showArchive, setShowArchive] = useState(false);
-  const [showTrash, setShowTrash] = useState(false);
-
-  const [sessions, setSessions] = useState<SessionMeta[]>([]);
-  const [trashSessions, setTrashSessions] = useState<SessionMeta[]>([]);
-
-  // Rinomina inline archivio/cestino
-  const [inlineEditId, setInlineEditId] = useState<string | null>(null);
-  const [inlineEditValue, setInlineEditValue] = useState<string>("");
-
-  // Pannelli
-  const [showAICostPanel, setShowAICostPanel] = useState(false);
-  const [showFirestorePanel, setShowFirestorePanel] = useState(false);
-  const [showPanelsMenu, setShowPanelsMenu] = useState(false);
-
-  // Contatori Firestore
-  const [totalReads, setTotalReads] = useState<number>(0);
-  const [totalWrites, setTotalWrites] = useState<number>(0);
-
-  // Uso cumulativo delle AI (persistente)
-  const [aiUsage, setAiUsage] = useState<AiUsage>(() => {
-    if (!hasWindow()) return EMPTY_AI_USAGE;
-    try {
-      const raw = safeGet(AI_USAGE_LS_KEY);
-      if (raw) return JSON.parse(raw);
-    } catch {
-      // se corrotto, riparto pulito
-    }
-    return EMPTY_AI_USAGE;
-  });
-
-  // Helpers costo Firestore
-  const incRead = (n = 1) => setTotalReads((v) => v + n);
-  const incWrite = (n = 1) => setTotalWrites((v) => v + n);
-
-// Persistenza contatori — FIX per evitare reset
-useEffect(() => {
-  if (!hasWindow()) return;
-
-  const savedR = safeGet("anovaTotalReads");
-  const savedW = safeGet("anovaTotalWrites");
-
-  // Evito assolutamente di sovrascrivere valori esistenti al boot
-  if (savedR !== null && savedW !== null) {
-    setTotalReads(parseInt(savedR, 10) || 0);
-    setTotalWrites(parseInt(savedW, 10) || 0);
-  }
-}, []);
-
-// Salvataggio SOLO dopo il bootstrap iniziale
-useEffect(() => {
-  if (!hasWindow()) return;
-  if (totalReads === 0 && totalWrites === 0) return; // evita sovrascritture iniziali
-  safeSet("anovaTotalReads", String(totalReads));
-  safeSet("anovaTotalWrites", String(totalWrites));
-}, [totalReads, totalWrites]);
-
-
-  // Persistenza uso AI
+  // -------------------------
+  // 3) BOOTSTRAP SESSION (NON PROJECT)
+  // -------------------------
   useEffect(() => {
     if (!hasWindow()) return;
-    safeSet(AI_USAGE_LS_KEY, JSON.stringify(aiUsage));
-  }, [aiUsage]);
+    if (!userId) return;
+    if (isProjectMode) return; // in project mode sessionId arriva dal progetto
 
-  // Bootstrap: contatori + creazione sessione collegata all'utente
-  useEffect(() => {
-    if (!hasWindow()) return;
-    if (!userId) return; // 🔒 aspetta l'UID prima di toccare Firestore
-if (isProjectMode) return; // ✅ in project mode la sessionId arriva da projects/{projectId}
-
-    // Carico contatori salvati
-    const savedR = safeGet("anovaTotalReads");
-    const savedW = safeGet("anovaTotalWrites");
-    if (savedR) setTotalReads(parseInt(savedR, 10) || 0);
-    if (savedW) setTotalWrites(parseInt(savedW, 10) || 0);
-
-    // Gestione sessione corrente
     let sid = safeGet("anovaSessionId");
     if (!sid) {
       sid = Date.now().toString();
@@ -219,6 +116,7 @@ if (isProjectMode) return; // ✅ in project mode la sessionId arriva da project
     }
     setSessionId(sid);
 
+    // assicuro doc sessione (merge)
     const sessRef = doc(db, "sessions", sid);
     setDoc(
       sessRef,
@@ -227,91 +125,50 @@ if (isProjectMode) return; // ✅ in project mode la sessionId arriva da project
         updatedAt: serverTimestamp(),
         lastMessage: "Sessione avviata.",
         deleted: false,
-        owner: userId, // 🔑 campo chiave per le regole
+        owner: userId,
       },
       { merge: true }
-    ).then(() => incWrite());
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    );
   }, [userId, isProjectMode]);
 
-// ⬇️ BLOCCO P1 — Listener progetto: owner check + sessionId forzato
-useEffect(() => {
-  if (!isProjectMode) return;
-  if (!userId) return;
-  if (!projectId) return;
-
-  const ref = doc(db, "projects", projectId);
-
-  const unsub = onSnapshot(ref, (snap) => {
-    const data = snap.data() as any;
-    if (!data) return;
-
-    // sicurezza base: progetto non tuo
-    if (data.owner !== userId) {
-      setToastMessage("🔒 Accesso negato: progetto non tuo.");
-      setTimeout(() => setToastMessage(null), 1800);
-      return;
-    }
-
-    setProject({ id: snap.id, ...(data as ProjectDoc) });
-
-    // ✅ sessione chat = sessionId del progetto
-    if (data.sessionId) {
-      setSessionId(data.sessionId);
-    }
-  });
-
-  return () => unsub();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-}, [isProjectMode, userId, projectId]);
-// ⬆️ FINE BLOCCO P1
-
-
-  // Cache in-memory + riferimenti listener
-  const cacheRef = useRef<SessionCache>({});
-  const activeMsgUnsubRef = useRef<null | (() => void)>(null);
-  const activeTitleUnsubRef = useRef<null | (() => void)>(null);
-  const delayedAttachTimerRef = useRef<null | number>(null);
-
-  // Listener Archivio + Cestino (ON-DEMAND, filtrato per owner)
+  // -------------------------
+  // 4) PROJECT LISTENER (owner check + sessionId)
+  // -------------------------
   useEffect(() => {
-    if (!showArchive && !showTrash) return;
-    if (!userId) return; // 🔒 niente query finché non sappiamo chi sei
+    if (!isProjectMode) return;
+    if (!userId) return;
+    if (!projectId) return;
 
-    const sessionsRef = collection(db, "sessions");
-    const qAll = query(
-      sessionsRef,
-      // mostro solo le sessioni dell'utente corrente
-      // @ts-ignore – where verrà importato se non c'è
-      where("owner", "==", userId),
-      orderBy("updatedAt", "desc"),
-      limit(100)
-    );
+    const ref = doc(db, "projects", projectId);
 
-    const unsub = onSnapshot(
-      qAll,
-      { includeMetadataChanges: false },
-      (snap) => {
-        const list = snap.docs.map((d) => ({
-          id: d.id,
-          ...(d.data() as any),
-        }));
+    const unsub = onSnapshot(ref, (snap) => {
+      const data = snap.data() as any;
+      if (!data) return;
 
-        setSessions(list.filter((s) => !s.deleted));
-        setTrashSessions(list.filter((s) => s.deleted));
-
-        incRead(Math.max(1, snap.docChanges().length));
+      // sicurezza base: progetto non tuo
+      if (data.owner !== userId) {
+        setToastMessage("🔒 Accesso negato: progetto non tuo.");
+        setTimeout(() => setToastMessage(null), 1800);
+        return;
       }
-    );
+
+      setProject({ id: snap.id, ...(data as ProjectDoc) });
+
+      // sessione chat = sessionId del progetto
+      if (data.sessionId) setSessionId(String(data.sessionId));
+    });
 
     return () => unsub();
-  }, [showArchive, showTrash, userId]);
+  }, [isProjectMode, userId, projectId, projectId]);
 
+  // -------------------------
+  // 5) LISTENER SESSIONE ATTIVA (titolo + messaggi)
+  // -------------------------
+  const activeMsgUnsubRef = useRef<null | (() => void)>(null);
+  const activeTitleUnsubRef = useRef<null | (() => void)>(null);
 
-
-  // Listener Sessione attiva (titolo + messaggi) con cache intelligente
   useEffect(() => {
-    // cleanup vecchi listener
+    // cleanup
     if (activeMsgUnsubRef.current) {
       activeMsgUnsubRef.current();
       activeMsgUnsubRef.current = null;
@@ -320,601 +177,341 @@ useEffect(() => {
       activeTitleUnsubRef.current();
       activeTitleUnsubRef.current = null;
     }
-    if (delayedAttachTimerRef.current && hasWindow()) {
-      window.clearTimeout(delayedAttachTimerRef.current);
-      delayedAttachTimerRef.current = null;
-    }
 
     if (!sessionId) return;
 
-    const cached = cacheRef.current[sessionId];
-    const now = Date.now();
-    const fresh = cached && now - cached.ts < CACHE_TTL_MS;
+    // titolo
+    const sessRef = doc(db, "sessions", sessionId);
+    activeTitleUnsubRef.current = onSnapshot(sessRef, (snap) => {
+      const t = (snap.data()?.title || "") as string;
+      setSessionTitle(t);
+    });
 
-    if (fresh) {
-      setMessages(cached.messages);
-      setSessionTitle(cached.title || "");
-
-      const delay = CACHE_TTL_MS - (now - cached.ts);
-      if (hasWindow()) {
-        delayedAttachTimerRef.current = window.setTimeout(() => {
-          attachActiveTitleListener(sessionId);
-          attachActiveMessagesListener(sessionId);
-        }, Math.max(0, delay));
-      }
-      return;
-    }
-
-    attachActiveTitleListener(sessionId);
-    attachActiveMessagesListener(sessionId);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessionId]);
-
-  // Auto-scroll in fondo quando arrivano messaggi
-  useEffect(() => {
-    if (bottomRef.current) {
-      bottomRef.current.scrollIntoView({ behavior: "smooth" });
-    }
-  }, [messages]);
-
-  // Attach titolo
-  const attachActiveTitleListener = (sid: string) => {
-    const sessRef = doc(db, "sessions", sid);
-    activeTitleUnsubRef.current = onSnapshot(
-      sessRef,
-      { includeMetadataChanges: false },
-      (snap) => {
-        const t = (snap.data()?.title || "") as string;
-        setSessionTitle(t);
-        incRead(1);
-
-        cacheRef.current[sid] = {
-          messages: cacheRef.current[sid]?.messages || [],
-          title: t,
-          ts: Date.now(),
-        };
-      }
-    );
-  };
-
-  // Attach messaggi (incrementale + low read)
-  const attachActiveMessagesListener = (sid: string) => {
-    const messagesRef = collection(db, "sessions", sid, "messages");
+    // messaggi
+    const messagesRef = collection(db, "sessions", sessionId, "messages");
     const qy = query(messagesRef, orderBy("createdAt", "desc"), limit(50));
 
-    activeMsgUnsubRef.current = onSnapshot(
-      qy,
-      { includeMetadataChanges: false },
-      (snap) => {
-        const changes = snap.docChanges();
-
-        setMessages((prev) => {
-          let updated = prev.length ? [...prev] : [];
-
-          if (updated.length === 0) {
-            const first: Message[] = snap.docs
-              .map((d) => ({ id: d.id, ...(d.data() as Message) }))
-              .reverse();
-            updated = first;
-            incRead(changes.length > 0 ? changes.length : first.length || 1);
-
-            cacheRef.current[sid] = {
-              messages: first,
-              title: cacheRef.current[sid]?.title || sessionTitle || "",
-              ts: Date.now(),
-            };
-            return first;
-          }
-
-          for (const c of changes) {
-            const data = { id: c.doc.id, ...(c.doc.data() as Message) };
-            if (c.type === "added") {
-              if (!updated.find((m) => m.id === data.id)) updated.push(data);
-            } else if (c.type === "modified") {
-              const idx = updated.findIndex((m) => m.id === data.id);
-              if (idx !== -1) updated[idx] = data;
-            } else if (c.type === "removed") {
-              updated = updated.filter((m) => m.id !== data.id);
-            }
-          }
-
-          updated.sort(
-            (a, b) => (a.createdAt?.seconds || 0) - (b.createdAt?.seconds || 0)
-          );
-          incRead(Math.max(1, changes.length));
-
-          cacheRef.current[sid] = {
-            messages: updated,
-            title: cacheRef.current[sid]?.title || sessionTitle || "",
-            ts: Date.now(),
-          };
-
-          return updated;
-        });
-      }
-    );
-  };
-
-  /* ===========================
-     Gestione sessioni
-     =========================== */
-
-  const handleNewSession = async () => {
-      if (isProjectMode) {
-    setToastMessage("🔒 Modalità progetto: le sessioni si gestiscono da WORK.");
-    setTimeout(() => setToastMessage(null), 1600);
-    return;
-  }
-
-      if (!userId) {
-    setToastMessage("⏳ Sto inizializzando l'utente, riprova tra un attimo.");
-    setTimeout(() => setToastMessage(null), 1500);
-    return;
-  }
-    const newId = Date.now().toString();
-    safeSet("anovaSessionId", newId);
-    setSessionId(newId);
-
-    const sessRef = doc(db, "sessions", newId);
-    await setDoc(sessRef, {
-      createdAt: serverTimestamp(),
-      updatedAt: serverTimestamp(),
-      lastMessage: "Sessione avviata. Pronta per lavorare insieme.",
-      deleted: false,
-      owner: userId,
+    activeMsgUnsubRef.current = onSnapshot(qy, (snap) => {
+      const rows: Message[] = snap.docs
+        .map((d) => ({ id: d.id, ...(d.data() as any) }))
+        .reverse();
+      setMessages(rows);
     });
-    incWrite(2);
 
-    const messagesRef = collection(db, "sessions", newId, "messages");
+    return () => {
+      if (activeMsgUnsubRef.current) activeMsgUnsubRef.current();
+      if (activeTitleUnsubRef.current) activeTitleUnsubRef.current();
+      activeMsgUnsubRef.current = null;
+      activeTitleUnsubRef.current = null;
+    };
+  }, [sessionId]);
 
-await addDoc(messagesRef, {
-  sender: "anova",
-  text: "Sessione avviata. Pronta per lavorare insieme.",
-  createdAt: serverTimestamp(),
-  owner: userId,
-});
+  // autoscroll
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages]);
 
-
-    incWrite();
-
-    setMessages([]);
-    setSessionTitle("");
-    cacheRef.current[newId] = { messages: [], title: "", ts: Date.now() };
-
-    setToastMessage("✅ Nuova sessione avviata");
-    setTimeout(() => setToastMessage(null), 1800);
-  };
-
+  // -------------------------
+  // 6) TITLE COMMIT
+  // -------------------------
   const commitActiveTitle = async () => {
     if (!sessionId) return;
-    const clean = sessionTitle?.trim();
+    const clean = sessionTitle.trim();
 
     await updateDoc(doc(db, "sessions", sessionId), {
       title: clean ? clean : null,
       updatedAt: serverTimestamp(),
     });
-    incWrite();
-
-    cacheRef.current[sessionId] = {
-      messages: cacheRef.current[sessionId]?.messages || [],
-      title: clean || "",
-      ts: Date.now(),
-    };
 
     setEditingTitle(false);
     setToastMessage("✏️ Titolo aggiornato");
     setTimeout(() => setToastMessage(null), 1200);
   };
 
-  const startInlineRename = (id: string, currentTitle?: string | null) => {
-    setInlineEditId(id);
-    setInlineEditValue((currentTitle || "").trim() || `#${id.slice(-6)}`);
-  };
-
-  const commitInlineRename = async (id: string) => {
-    const value = inlineEditValue.trim();
-    await updateDoc(doc(db, "sessions", id), {
-      title: value || null,
-      updatedAt: serverTimestamp(),
-    });
-    incWrite();
-
-    if (id === sessionId) {
-      setSessionTitle(value);
-      cacheRef.current[id] = {
-        messages: cacheRef.current[id]?.messages || [],
-        title: value,
-        ts: Date.now(),
-      };
-    }
-
-    setInlineEditId(null);
-    setInlineEditValue("");
-    setToastMessage("✏️ Titolo aggiornato");
-    setTimeout(() => setToastMessage(null), 1000);
-  };
-
-  const handleOpenSession = (id: string) => {
-      if (isProjectMode) {
-    setToastMessage("🔒 Modalità progetto: non puoi cambiare sessione da qui.");
-    setTimeout(() => setToastMessage(null), 1600);
-    return;
-  }
-
-    safeSet("anovaSessionId", id);
-    setSessionId(id);
-    setShowArchive(false);
-    setShowTrash(false);
-    setToastMessage("📂 Sessione caricata");
-    setTimeout(() => setToastMessage(null), 1000);
-  };
-
-  const handleDeleteSession = async (id: string) => {
-    await updateDoc(doc(db, "sessions", id), {
-      deleted: true,
-      updatedAt: serverTimestamp(),
-    });
-    incWrite();
-    setToastMessage("🗑️ Spostata nel cestino");
-    setTimeout(() => setToastMessage(null), 1200);
-  };
-
-  const handleRestoreSession = async (id: string) => {
-    await updateDoc(doc(db, "sessions", id), {
-      deleted: false,
-      updatedAt: serverTimestamp(),
-    });
-    incWrite();
-    setToastMessage("♻️ Sessione ripristinata");
-    setTimeout(() => setToastMessage(null), 1200);
-  };
-
-  /* ===========================
-     Invio messaggi + orchestratore
-     =========================== */
-
-const handleSend = async (e: FormEvent) => {
-
-  e.preventDefault();
-  const trimmed = input.trim();
-  if (!trimmed || !sessionId) return;
-
-// ✅ COHERENCE GATE (NO-AI): prima di spendere 1 token
-if (isProjectMode && project) {
-  const b1 = ((project as any)?.brief?.round1 ?? {}) as any;
-  const b2 = (project as any)?.brief?.round2 ?? {};
+  // -------------------------
+  // 7) SEND MESSAGE + ORCHESTRATE
+  // -------------------------
+  const handleSend = async (e: FormEvent) => {
+    e.preventDefault();
+    const trimmed = input.trim();
+    if (!trimmed || !sessionId) return;
+    
+// ✅ COMANDO LOCALE: avvio produzione senza chiamare l'AI
+if (isProjectMode && projectId && project) {
   const stage = String((project as any)?.stage ?? "");
+  const cmd = trimmed.toLowerCase().replace(/\s+/g, " ").trim();
 
-  const res = checkScritturaBreveCoherence({
-    brief1: b1,
-    brief2: b2,
-    userText: trimmed,
-  });
+  if (stage === "OPEN_CHAT" && (cmd === "produzione" || cmd === "avvia produzione")) {
+    await updateDoc(doc(db, "projects", projectId), {
+      stage: "PRODUCTION",
+      updatedAt: serverTimestamp(),
+    });
 
-  // HARD → stop totale (sempre)
-  if (res.verdict === "HARD_MISMATCH") {
-    setMismatchWarning(
-      `⚠️ Coerenza brief: ${res.reason}. ` +
-        `Allinea il brief (WORK) prima di andare avanti.`
-    );
-    setToastMessage("⛔ Richiesta bloccata: incoerenza col brief.");
-    setTimeout(() => setToastMessage(null), 1800);
-    return;
-  }
-
-  // SOFT → warning in OPEN_CHAT, blocco in PRODUCTION
-  if (res.verdict === "SOFT_MISMATCH") {
-    setMismatchWarning(
-      `⚠️ Coerenza brief (soft): ${res.reason}. ` +
-        `Se hai cambiato idea, premi “Modifica brief”.`
-    );
-
-    if (stage === "PRODUCTION") {
-      setToastMessage("⛔ Produzione bloccata: conferma/allinea il brief.");
-      setTimeout(() => setToastMessage(null), 1800);
-      return;
-    }
-  } else {
-    setMismatchWarning(null);
+    setInput("");
+    setToastMessage("✅ Produzione avviata (stage=PRODUCTION)");
+    setTimeout(() => setToastMessage(null), 1400);
+    return; // 🔒 IMPORTANTISSIMO: non salvare msg, non chiamare /api/orchestrate
   }
 }
 
-
-  // ✅ Gating progetto: chat attiva solo in OPEN_CHAT o PRODUCTION
-  if (isProjectMode) {
-    const st = (project as any)?.stage;
-    if (st && st !== "OPEN_CHAT" && st !== "PRODUCTION") {
-      setToastMessage("🔒 Chat chiusa: completa i brief in WORK fino a OPEN_CHAT.");
-      setTimeout(() => setToastMessage(null), 1800);
+    // gating: userId pronto
+    if (!userId) {
+      setToastMessage("⏳ Connessione utente in corso, riprova.");
+      setTimeout(() => setToastMessage(null), 1500);
       return;
     }
-  }
 
-  // 🧩 Controllo: utente anonimo non ancora pronto
-  if (!userId) {
-    setToastMessage("⏳ Connessione utente in corso, riprova.");
-    setTimeout(() => setToastMessage(null), 1500);
-    return;
-  }
+    // gating progetto: chat attiva solo OPEN_CHAT / PRODUCTION
+    if (isProjectMode) {
+      const st = String((project as any)?.stage ?? "");
+      if (st && st !== "OPEN_CHAT" && st !== "PRODUCTION") {
+        setToastMessage("🔒 Chat chiusa: completa i brief in WORK fino a OPEN_CHAT.");
+        setTimeout(() => setToastMessage(null), 1800);
+        return;
+      }
+    }
 
-  const messagesRef = collection(db, "sessions", sessionId, "messages");
+    // COHERENCE GATE (NO-AI)
+    if (isProjectMode && project) {
+      const b1 = ((project as any)?.brief?.round1 ?? {}) as any;
+      const b2 = (project as any)?.brief?.round2 ?? {};
+      const stage = String((project as any)?.stage ?? "");
 
+      const res = checkScritturaBreveCoherence({
+        brief1: b1,
+        brief2: b2,
+        userText: trimmed,
+      });
 
-    // 1️⃣ Messaggio utente
+      if (res.verdict === "HARD_MISMATCH") {
+        setMismatchWarning(
+          `⚠️ Coerenza brief: ${res.reason}. Allinea il brief (WORK) prima di andare avanti.`
+        );
+        setToastMessage("⛔ Richiesta bloccata: incoerenza col brief.");
+        setTimeout(() => setToastMessage(null), 1800);
+        return;
+      }
+
+      if (res.verdict === "SOFT_MISMATCH") {
+        setMismatchWarning(
+          `⚠️ Coerenza brief (soft): ${res.reason}. Se hai cambiato idea, premi “Modifica brief”.`
+        );
+
+        if (stage === "PRODUCTION") {
+          setToastMessage("⛔ Produzione bloccata: conferma/allinea il brief.");
+          setTimeout(() => setToastMessage(null), 1800);
+          return;
+        }
+      } else {
+        setMismatchWarning(null);
+      }
+    }
+
+    const messagesRef = collection(db, "sessions", sessionId, "messages");
+
+    // 1) salva msg utente
     await addDoc(messagesRef, {
       sender: "user",
       text: trimmed,
       createdAt: serverTimestamp(),
-      owner: userId
+      owner: userId,
     });
-    incWrite(2);
 
     await updateDoc(doc(db, "sessions", sessionId), {
       updatedAt: serverTimestamp(),
       lastMessage: trimmed,
     });
-    incWrite();
 
     setInput("");
 
-    // 2️⃣ Chiamata orchestratore
+    // 2) chiamata orchestratore
     let aiResponse = "Elaborazione in corso...";
-    let costThisRequest = 0;
-    let rawProviders: any[] = [];
 
     try {
       const res = await fetch("/api/orchestrate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-body: JSON.stringify({
-  prompt: trimmed,
-  sessionId,
-  userId,
-  projectPacket: isProjectMode
-    ? {
-        projectId,
-        intent: (project as any)?.intent,
-        mode: (project as any)?.mode,
-        stage: (project as any)?.stage,
-
-        // ✅ PASSO I DATI DEL BRIEF (fondamentale)
-        brief: {
-          round1: (project as any)?.brief?.round1 ?? null,
-          round2: (project as any)?.brief?.round2 ?? null,
-        },
-      }
-    : undefined,
-}),
-
-
-
-
+        body: JSON.stringify({
+          prompt: trimmed,
+          sessionId,
+          userId,
+          projectPacket: isProjectMode
+            ? {
+                projectId,
+                // NB: se in futuro togli intent, qui lo lasciamo solo se esiste
+                intent: (project as any)?.intent,
+                mode: (project as any)?.mode,
+                stage: (project as any)?.stage,
+                brief: {
+                  round1: (project as any)?.brief?.round1 ?? null,
+                  round2: (project as any)?.brief?.round2 ?? null,
+                },
+              }
+            : undefined,
+        }),
       });
 
       const data = await res.json();
 
       setDebugInfo({
-        // per pannelli tecnici
         raw: data.raw || [],
         meta: data.meta || {},
       });
 
-      aiResponse =
-        data?.fusion?.finalText ||
-        "⚠️ Nessuna risposta utile dall'orchestratore.";
-
-      costThisRequest = data?.costThisRequest ?? 0;
-      rawProviders = Array.isArray(data?.raw) ? data.raw : [];
-
-      console.log("🧠 ANOVA β — Risposta fusa:", data.fusion);
-      console.log("🧠 ANOVA β — Meta:", data.meta);
-      console.log("🧠 ANOVA β — Costo richiesta:", costThisRequest);
+      aiResponse = data?.fusion?.finalText || "⚠️ Nessuna risposta utile dall'orchestratore.";
     } catch (err) {
       console.error("Errore chiamata orchestratore:", err);
       aiResponse = "❌ Errore nel motore cognitivo. Riprova.";
     }
 
-    // 3️⃣ Aggiorno uso AI cumulativo
-    if (rawProviders.length > 0 || costThisRequest > 0) {
-      setAiUsage((prev) => {
-        const next: AiUsage = {
-          ...prev,
-          totalCalls: prev.totalCalls,
-          totalCostUsd: prev.totalCostUsd + costThisRequest,
-          totalTokens: prev.totalTokens,
-          perProvider: { ...prev.perProvider },
-        };
-
-        (rawProviders as any[]).forEach((r) => {
-          const pid = r.provider as ProviderKey;
-          if (!pid || !next.perProvider[pid]) return;
-
-          const cost = r.estimatedCost ?? 0;
-          const tokens = r.tokensUsed ?? 0;
-
-          next.totalCalls += 1;
-          next.totalTokens += tokens;
-
-          const prevProv = next.perProvider[pid];
-          next.perProvider[pid] = {
-            calls: prevProv.calls + 1,
-            costUsd: prevProv.costUsd + cost,
-            tokens: prevProv.tokens + tokens,
-          };
-        });
-
-        return next;
-      });
-    }
-
-    // 4️⃣ Salvo la risposta di Anova
+    // 3) salva risposta anova
     await addDoc(messagesRef, {
       sender: "anova",
       text: aiResponse,
       createdAt: serverTimestamp(),
-      owner: userId
+      owner: userId,
     });
-    incWrite(2);
 
     await updateDoc(doc(db, "sessions", sessionId), {
       updatedAt: serverTimestamp(),
       lastMessage: aiResponse,
     });
-    incWrite();
-
-    cacheRef.current[sessionId] = {
-      messages: [
-        ...(cacheRef.current[sessionId]?.messages || []),
-        { sender: "user", text: trimmed },
-        { sender: "anova", text: aiResponse },
-      ],
-      title: cacheRef.current[sessionId]?.title || sessionTitle || "",
-      ts: Date.now(),
-    };
   };
+// =========================
+// CONTRATTO (per sidebar orchestratore)
+// =========================
+const contractSections =
+  isProjectMode &&
+  project &&
+  (project as any).intent === "scrittura" &&
+  (project as any).mode === "breve"
+    ? buildScritturaBreveContractAll(
+        ((project as any)?.brief?.round1 ?? {}) as ScritturaBreveBrief1,
+        (project as any)?.brief?.round2 ?? {}
+      )
+    : null;
 
-  /* ===========================
-     UI
-     =========================== */
-
-  const handleToggleOrchestrator = () => {
-    setShowOrchestrator((v) => !v);
-  };
+  // -------------------------
+  // 8) UI
+  // -------------------------
+  const handleToggleOrchestrator = () => setShowOrchestrator((v) => !v);
 
   return (
     <main className="h-screen w-screen flex bg-black text-neutral-100 relative overflow-hidden">
-      {/* Sidebar archivio + cestino */}
-      <ChatSidePanels
-        showArchive={showArchive}
-        showTrash={showTrash}
-        setShowArchive={setShowArchive}
-        setShowTrash={setShowTrash}
-        sessions={sessions}
-        trashSessions={trashSessions}
-        inlineEditId={inlineEditId}
-        inlineEditValue={inlineEditValue}
-        setInlineEditValue={setInlineEditValue}
-        startInlineRename={startInlineRename}
-        commitInlineRename={commitInlineRename}
-        handleOpenSession={handleOpenSession}
-        handleDeleteSession={handleDeleteSession}
-        handleRestoreSession={handleRestoreSession}
-      />
-
-      {/* Colonna centrale: Header fisso + Messaggi + Input */}
+      {/* Colonna centrale */}
       <div
         className="flex-1 flex flex-col transition-all duration-200"
         style={{
           width: showOrchestrator ? `calc(100vw - ${orchWidth}px)` : "100vw",
           marginRight: showOrchestrator ? `${orchWidth}px` : 0,
-        }}>
-{/* ⬇️ BLOCCO P2 — Project Banner (V2) */}
-{isProjectMode && project && (
-  <div className="border-b border-neutral-800 bg-neutral-950 px-6 py-3 text-sm">
-    <div className="flex items-center justify-between gap-3">
-      <div className="text-neutral-300">
-        Progetto: <b className="text-white">{(project as any).intent?.toUpperCase()}</b> — Mode:{" "}
-        <b className="text-white">{(project as any).mode?.toUpperCase()}</b> — Stage:{" "}
-        <b className="text-white">{(project as any).stage}</b>
-      </div>
+        }}
+      >
+        {/* Banner progetto */}
+        {isProjectMode && project && (
+          <div className="border-b border-neutral-800 bg-neutral-950 px-6 py-3 text-sm">
+            <div className="flex items-center justify-between gap-3">
+              <div className="text-neutral-300">
+                Progetto:{" "}
+                <b className="text-white">{(project as any).intent?.toUpperCase()}</b> — Mode:{" "}
+                <b className="text-white">{String((project as any).mode ?? "").toUpperCase()}</b> — Stage:{" "}
+                <b className="text-white">{String((project as any).stage ?? "")}</b>
+              </div>
 
-      <div className="flex items-center gap-2">
-        <button
-          className="border border-white/15 bg-white/0 hover:bg-white/5 px-3 py-1.5 rounded-lg font-medium transition"
-          onClick={() => setShowBriefSummary((v) => !v)}
-        >
-          {showBriefSummary ? "Nascondi brief" : "Mostra brief"}
-        </button>
+              <div className="flex items-center gap-2">
+                <button
+                  className="border border-white/15 bg-white/0 hover:bg-white/5 px-3 py-1.5 rounded-lg font-medium transition"
+                  onClick={() => setShowBriefSummary((v) => !v)}
+                >
+                  {showBriefSummary ? "Nascondi brief" : "Mostra brief"}
+                </button>
 
-        <button
-          className="border border-white/15 bg-white/0 hover:bg-white/5 px-3 py-1.5 rounded-lg font-medium transition"
-          onClick={async () => {
-            if (!projectId) return;
-            await updateDoc(doc(db, "projects", projectId), {
-              stage: "BRIEF_1",
-              updatedAt: serverTimestamp(),
-            });
-            router.push(`/work/p/${projectId}`);
-          }}
-        >
-          Modifica brief
-        </button>
+                <button
+                  className="border border-white/15 bg-white/0 hover:bg-white/5 px-3 py-1.5 rounded-lg font-medium transition"
+                  onClick={async () => {
+                    if (!projectId) return;
+                    await updateDoc(doc(db, "projects", projectId), {
+                      stage: "BRIEF_1",
+                      updatedAt: serverTimestamp(),
+                    });
+                    router.push(`/work/p/${projectId}`);
+                  }}
+                >
+                  Modifica brief
+                </button>
 
-        {(project as any).stage === "OPEN_CHAT" && (
-          <button
-            className="bg-white text-black px-3 py-1.5 rounded-lg font-medium hover:bg-neutral-200 transition"
-            style={{ color: "#000" }}
-            onClick={async () => {
-              if (!projectId) return;
-              await updateDoc(doc(db, "projects", projectId), {
-                stage: "PRODUCTION",
-                updatedAt: serverTimestamp(),
-              });
-              setToastMessage("✅ Produzione avviata");
-              setTimeout(() => setToastMessage(null), 1200);
-            }}
-          >
-            Avvia Produzione
-          </button>
-        )}
-      </div>
-    </div>
-
-    {/* ✅ Brief summary (solo Scrittura/Breve per ora) */}
-    {showBriefSummary &&
-      (project as any).intent === "scrittura" &&
-      (project as any).mode === "breve" && (
-        <div className="mt-3 rounded-xl border border-white/10 bg-black/30 p-3">
-          {buildScritturaBreveContractAll(
-            ((project as any)?.brief?.round1 ?? {}) as ScritturaBreveBrief1,
-            (project as any)?.brief?.round2 ?? {}
-          ).map((s) => (
-            <div key={s.title} className="mt-2 first:mt-0">
-              <div className="font-semibold text-white/90">{s.title}</div>
-              <ul className="list-disc ml-5 mt-1 text-white/70 space-y-0.5">
-                {s.lines.map((l) => (
-                  <li key={l}>{l}</li>
-                ))}
-              </ul>
+                {(project as any).stage === "OPEN_CHAT" && (
+                  <button
+                    className="bg-white text-black px-3 py-1.5 rounded-lg font-medium hover:bg-neutral-200 transition"
+                    style={{ color: "#000" }}
+                    onClick={async () => {
+                      if (!projectId) return;
+                      await updateDoc(doc(db, "projects", projectId), {
+                        stage: "PRODUCTION",
+                        updatedAt: serverTimestamp(),
+                      });
+                      setToastMessage("✅ Produzione avviata");
+                      setTimeout(() => setToastMessage(null), 1200);
+                    }}
+                  >
+                    Avvia Produzione
+                  </button>
+                )}
+              </div>
             </div>
-          ))}
-        </div>
-      )}
 
-    {/* ✅ Warning coerenza (soft) */}
-    {mismatchWarning && (
-      <div className="mt-3 rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 text-amber-200">
-        <div className="font-semibold">Coerenza brief</div>
-        <div className="text-sm mt-1">{mismatchWarning}</div>
-        <div className="mt-2 flex gap-2">
-          <button
-            className="bg-amber-300 text-black px-3 py-1.5 rounded-lg font-medium hover:bg-amber-200 transition"
-            onClick={async () => {
-              if (!projectId) return;
-              await updateDoc(doc(db, "projects", projectId), {
-                stage: "BRIEF_1",
-                updatedAt: serverTimestamp(),
-              });
-              router.push(`/work/p/${projectId}`);
-            }}
-          >
-            Aggiorna brief
-          </button>
-          <button
-            className="border border-amber-500/30 px-3 py-1.5 rounded-lg font-medium hover:bg-amber-500/10 transition"
-            onClick={() => setMismatchWarning(null)}
-          >
-            Ignora
-          </button>
-        </div>
-      </div>
-    )}
-  </div>
-)}
-{/* ⬆️ FINE BLOCCO P2 */}
+            {/* Brief summary */}
+            {showBriefSummary &&
+              (project as any).intent === "scrittura" &&
+              (project as any).mode === "breve" && (
+                <div className="mt-3 rounded-xl border border-white/10 bg-black/30 p-3">
+                  {buildScritturaBreveContractAll(
+                    ((project as any)?.brief?.round1 ?? {}) as ScritturaBreveBrief1,
+                    (project as any)?.brief?.round2 ?? {}
+                  ).map((s) => (
+                    <div key={s.title} className="mt-2 first:mt-0">
+                      <div className="font-semibold text-white/90">{s.title}</div>
+                      <ul className="list-disc ml-5 mt-1 text-white/70 space-y-0.5">
+                        {s.lines.map((l) => (
+                          <li key={l}>{l}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  ))}
+                </div>
+              )}
 
+            {/* Warning coerenza */}
+            {mismatchWarning && (
+              <div className="mt-3 rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 text-amber-200">
+                <div className="font-semibold">Coerenza brief</div>
+                <div className="text-sm mt-1">{mismatchWarning}</div>
+                <div className="mt-2 flex gap-2">
+                  <button
+                    className="bg-amber-300 text-black px-3 py-1.5 rounded-lg font-medium hover:bg-amber-200 transition"
+                    onClick={async () => {
+                      if (!projectId) return;
+                      await updateDoc(doc(db, "projects", projectId), {
+                        stage: "BRIEF_1",
+                        updatedAt: serverTimestamp(),
+                      });
+                      router.push(`/work/p/${projectId}`);
+                    }}
+                  >
+                    Aggiorna brief
+                  </button>
+                  <button
+                    className="border border-amber-500/30 px-3 py-1.5 rounded-lg font-medium hover:bg-amber-500/10 transition"
+                    onClick={() => setMismatchWarning(null)}
+                  >
+                    Ignora
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
 
-      
+        {/* Header chat (solo Orchestratore + rename titolo) */}
         <ChatHeader
           sessionId={sessionId}
           sessionTitle={sessionTitle}
@@ -922,57 +519,40 @@ body: JSON.stringify({
           editingTitle={editingTitle}
           setEditingTitle={setEditingTitle}
           onCommitTitle={commitActiveTitle}
-          onNewSession={handleNewSession}
-          showArchive={showArchive}
-          showTrash={showTrash}
-          onToggleArchive={() => setShowArchive((v) => !v)}
-          onToggleTrash={() => setShowTrash((v) => !v)}
-          showPanelsMenu={showPanelsMenu}
-          setShowPanelsMenu={setShowPanelsMenu}
-          onOpenAICostPanel={() => setShowAICostPanel(true)}
-          onOpenFirestorePanel={() => setShowFirestorePanel(true)}
           showOrchestrator={showOrchestrator}
           onToggleOrchestrator={handleToggleOrchestrator}
         />
 
         <ChatMessages messages={messages} bottomRef={bottomRef} />
 
-       <ChatInput
-  input={input}
-  setInput={setInput}
-  onSend={handleSend}
- disabled={!!(isProjectMode && project && (project as any).stage !== "OPEN_CHAT" && (project as any).stage !== "PRODUCTION")}
-
-  disabledHint="Chat chiusa: completa i brief in WORK fino a OPEN_CHAT."
-  onBlocked={() => {
-    setToastMessage("🔒 Chat chiusa: completa i brief in WORK.");
-    setTimeout(() => setToastMessage(null), 1400);
-  }}
-/>
-
+        <ChatInput
+          input={input}
+          setInput={setInput}
+          onSend={handleSend}
+          disabled={
+            Boolean(
+              isProjectMode &&
+                project &&
+                (project as any).stage !== "OPEN_CHAT" &&
+                (project as any).stage !== "PRODUCTION"
+            )
+          }
+          disabledHint="Chat chiusa: completa i brief in WORK fino a OPEN_CHAT."
+          onBlocked={() => {
+            setToastMessage("🔒 Chat chiusa: completa i brief in WORK.");
+            setTimeout(() => setToastMessage(null), 1400);
+          }}
+        />
       </div>
 
-      {/* Pannelli modali */}
-
-      {showAICostPanel && (
-        <AICostPanel aiUsage={aiUsage} onClose={() => setShowAICostPanel(false)} />
-      )}
-
-      {showFirestorePanel && (
-        <FirestoreCostPanel
-          totalReads={totalReads}
-          totalWrites={totalWrites}
-          onClose={() => setShowFirestorePanel(false)}
-        />
-      )}
-
-      {/* Sidebar orchestratore con drag */}
+      {/* Sidebar orchestratore */}
       <ChatOrchestratorSidebar
         open={showOrchestrator}
         width={orchWidth}
         setWidth={setOrchWidth}
         onClose={() => setShowOrchestrator(false)}
         debugInfo={debugInfo}
+        contract={contractSections}
       />
 
       {/* Toast */}
@@ -984,4 +564,3 @@ body: JSON.stringify({
     </main>
   );
 }
-// ⬆️ FINE BLOCCO 15.0 — ChatPage v5 //

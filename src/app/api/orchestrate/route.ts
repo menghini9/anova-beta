@@ -1,223 +1,281 @@
-// ⬇️ BLOCCO 14 — /src/app/api/orchestrate/route.ts
-// ANOVA_ORCHESTRATOR_V45 — Stage-aware + Server Coherence Gate (NO-AI)
+// ======================================================
+// ANOVA — API ORCHESTRATE (V2 CLEAN + CONTRACT)
+// Path: /src/app/api/orchestrate/route.ts
+// Obiettivo:
+// - Sempre risposta
+// - Usa CONTRATTO derivato dai brief
+// - OPEN_CHAT: NO output finale, max 3 domande SOLO se mancano dati critici
+// - PRODUCTION: output finale (1 + 1 alternativa), max 1 domanda se manca dato critico
+// - Ritorna contractSections per sidebar orchestratore
+// ======================================================
 
 import { NextResponse } from "next/server";
-import { getAIResponse } from "@/lib/orchestrator";
 
-// ✅ Brief tools (NO-AI)
-import { checkScritturaBreveCoherence } from "@/lib/brief/scrittura/breve/brief2";
-import { buildScritturaBreveContractAll } from "@/lib/brief/scrittura/breve/brief2";
+// ✅ Provider diretti (stabili)
+import { invokeOpenAIEconomic, invokeOpenAIBalanced } from "@/lib/providers/openai";
+
+// ✅ Contratto (server-side) — usa la TUA struttura reale: breve/index.ts
 import type { ScritturaBreveBrief1 } from "@/lib/brief/scrittura/breve/brief1";
+import { buildScritturaBreveContractAll } from "@/lib/brief/scrittura/breve/brief2";
 
-type ProjectBriefPacket = {
-  round1?: any; // ScritturaBreveBrief1 (quando intent=scrittura, mode=breve)
-  round2?: any; // modulo brief2 (dipende da Q1)
-};
 
+// ---------------------------
+// Tipi payload in ingresso
+// ---------------------------
 type ProjectPacket = {
   projectId?: string;
   intent?: string;
-  mode?: string; // breve | guidato
+  mode?: string; // breve | guidato | ...
   stage?: string; // OPEN_CHAT | PRODUCTION | ...
-  briefContract?: string; // opzionale (se lo mandi già pronto)
-  contextText?: string; // opzionale
-  brief?: ProjectBriefPacket; // ✅ nuovo: dati round1/round2
+  brief?: {
+    round1?: unknown;
+    round2?: unknown;
+  };
 };
 
-// ======================================================
-// Helpers — Response Standard (per stop senza provider)
-// ======================================================
-function blockedResponse(args: {
-  reason: string;
-  verdict: "HARD_MISMATCH" | "SOFT_MISMATCH";
-  stage?: string;
-}) {
-  return {
-    fusion: {
-      finalText:
-        `⚠️ Coerenza brief: ${args.reason}\n` +
-        `Vai in WORK → “Modifica brief” e allinea il brief prima di continuare.`,
-    },
-    meta: {
-      blocked: true,
-      blockedReason: "COHERENCE_MISMATCH",
-      stage: args.stage ?? "n/a",
-      coherence: { verdict: args.verdict, reason: args.reason },
-    },
-    raw: [],
-    costThisRequest: 0,
-  };
+type ContractSection = { title: string; lines: string[] };
+
+type ProviderRow = {
+  provider: string;
+  text: string;
+  success: boolean;
+  error?: string;
+  latencyMs: number;
+  tokensUsed?: number;
+  promptTokens?: number;
+  completionTokens?: number;
+  estimatedCost?: number;
+};
+
+// ---------------------------
+// Contract builders
+// ---------------------------
+function buildContractSections(brief1: unknown, brief2: unknown): ContractSection[] {
+  try {
+    const sections = buildScritturaBreveContractAll(
+      (brief1 ?? {}) as ScritturaBreveBrief1,
+      (brief2 ?? {}) as any
+    ) as any;
+
+    return (Array.isArray(sections) ? sections : []).map((s: any) => ({
+      title: String(s?.title ?? "Sezione"),
+      lines: Array.isArray(s?.lines) ? s.lines.map((l: any) => String(l)) : [],
+    }));
+  } catch {
+    return [
+      {
+        title: "BRIEF_JSON (fallback)",
+        lines: [JSON.stringify({ brief1, brief2 }, null, 2)],
+      },
+    ];
+  }
 }
 
-function normalizeStage(stage?: string) {
-  if (!stage) return "";
-  return String(stage).toUpperCase();
+function contractToText(sections: ContractSection[]): string {
+  return sections
+    .map((s) => {
+      const lines = (s.lines ?? []).map((l) => `- ${l}`).join("\n");
+      return `# ${s.title}\n${lines}`;
+    })
+    .join("\n\n");
+}
+
+// ---------------------------
+// Stage instruction
+// ---------------------------
+function buildStageInstruction(stage?: string) {
+  if (stage === "OPEN_CHAT") {
+    return [
+      "=== STAGE: OPEN_CHAT (PRE-PRODUZIONE) ===",
+      "Scopo: validare/completare il CONTRATTO. NON consegnare l'output finale.",
+      "",
+      "REGOLE (OBBLIGATORIE):",
+      "- Il CONTRATTO è la fonte primaria: se un dato è nel contratto, NON chiederlo.",
+      "- La RICHIESTA UTENTE è contesto operativo: usala per personalizzare, senza rifare recap.",
+      "- Non fare recap del contratto (il contratto è mostrato in UI).",
+      "- Fai AL MASSIMO 3 domande e SOLO se mancano dati DAVVERO critici per produrre bene.",
+      "- Se non manca nulla: rispondi con UNA riga: '✅ Contratto completo. Pronto per PRODUCTION.'",
+      "- Se noti mismatch col contratto: fai 1 domanda secca (SI/NO) e fermati.",
+      "",
+      "FORMATO OUTPUT:",
+      "A) (Solo se necessario) Domande numerate (max 3)",
+      "B) Oppure: '✅ Contratto completo. Pronto per PRODUCTION.'",
+    ].join("\n");
+  }
+
+  if (stage === "PRODUCTION") {
+    return [
+      "=== STAGE: PRODUCTION ===",
+      "Scopo: consegnare l'output finale seguendo il CONTRATTO.",
+      "",
+      "REGOLE (OBBLIGATORIE):",
+      "- Se mode=breve: consegna 1 versione + 1 alternativa standard (subito).",
+      "- NON fare domande se la risposta è nel contratto.",
+      "- Se manca un dato critico: fai UNA domanda secca e fermati (niente output finché non risponde).",
+    ].join("\n");
+  }
+
+  return [
+    "=== STAGE: GENERIC ===",
+    "Segui il contratto se presente e rispondi in modo utile.",
+  ].join("\n");
+}
+
+// ---------------------------
+// Prompt builder (ordine corretto)
+// ---------------------------
+function buildEffectivePrompt(args: {
+  projectId: string;
+  intent: string;
+  mode: string;
+  stage: string;
+  contractText: string;
+  stageInstruction: string;
+  userPrompt: string;
+}) {
+  const {
+    projectId,
+    intent,
+    mode,
+    stage,
+    contractText,
+    stageInstruction,
+    userPrompt,
+  } = args;
+
+  return [
+    "=== ANOVA — CONTESTO PROGETTO (NON COPIARE IN OUTPUT) ===",
+    `ProjectId: ${projectId}`,
+    `Intent: ${intent}`,
+    `Mode: ${mode}`,
+    `Stage: ${stage}`,
+    "",
+    "--- CONTRATTO (DA BRIEF) ---",
+    contractText,
+    "",
+    "=== PRIORITÀ INPUT (NON COPIARE IN OUTPUT) ===",
+    "1) CONTRATTO = specifica (forma + vincoli + contenuto deciso).",
+    "2) RICHIESTA UTENTE = contesto corrente: usala per personalizzare e scegliere cosa enfatizzare.",
+    "3) Se la richiesta utente CONTRADDICE il contratto: 1 domanda secca di allineamento, poi stop.",
+    "",
+    stageInstruction,
+    "",
+    "=== RICHIESTA UTENTE ===",
+    userPrompt,
+  ].join("\n");
 }
 
 // ======================================================
 // POST
 // ======================================================
 export async function POST(req: Request) {
-  try {
-    const body = await req.json();
+  const t0 = Date.now();
 
-    const { prompt, userId, sessionId, projectPacket } = body as {
-      prompt: string;
+  try {
+    const body = (await req.json()) as {
+      prompt?: unknown;
       userId?: string;
       sessionId?: string;
       projectPacket?: ProjectPacket;
     };
 
-    if (!prompt || typeof prompt !== "string") {
+    const prompt = typeof body.prompt === "string" ? body.prompt.trim() : "";
+    const projectPacket = body.projectPacket;
+
+    if (!prompt) {
       return NextResponse.json({ error: "missing_prompt" }, { status: 400 });
     }
 
     const isProject = Boolean(projectPacket?.projectId);
-    const stage = normalizeStage(projectPacket?.stage);
+    const stage = String(projectPacket?.stage ?? "GENERIC");
+    const mode = String(projectPacket?.mode ?? "n/a");
 
-    // ======================================================
-    // 1) SERVER COHERENCE GATE (NO-AI) — Solo Scrittura/Breve
-    // ======================================================
-    if (isProject && projectPacket?.intent === "scrittura" && projectPacket?.mode === "breve") {
-      const b1 = (projectPacket?.brief?.round1 ?? null) as ScritturaBreveBrief1 | null;
-      const b2 = projectPacket?.brief?.round2 ?? {};
+    const brief1 = projectPacket?.brief?.round1 ?? null;
+    const brief2 = projectPacket?.brief?.round2 ?? null;
 
-      // se manca round1 in PRODUCTION → blocco hard (sennò produci roba a caso)
-      if (!b1) {
-        if (stage === "PRODUCTION") {
-          return NextResponse.json(
-            blockedResponse({
-              verdict: "HARD_MISMATCH",
-              reason: "brief mancante (round1).",
-              stage,
-            }),
-            { status: 200 }
-          );
-        }
-        // in OPEN_CHAT: non blocco, ma segnalo sotto in meta (solo warning)
-      } else {
-        const res = checkScritturaBreveCoherence({
-          brief1: b1 as any,
-          brief2: b2 as any,
-          userText: prompt,
-        });
+    const contractSections = isProject ? buildContractSections(brief1, brief2) : [];
+    const contractText = isProject ? contractToText(contractSections) : "";
+    const stageInstruction = isProject ? buildStageInstruction(stage) : "";
 
-        // HARD → stop sempre
-        if (res.verdict === "HARD_MISMATCH") {
-          return NextResponse.json(
-            blockedResponse({ verdict: "HARD_MISMATCH", reason: res.reason, stage }),
-            { status: 200 }
-          );
-        }
-
-        // SOFT → stop solo in PRODUCTION
-        if (res.verdict === "SOFT_MISMATCH" && stage === "PRODUCTION") {
-          return NextResponse.json(
-            blockedResponse({ verdict: "SOFT_MISMATCH", reason: res.reason, stage }),
-            { status: 200 }
-          );
-        }
-
-        // se SOFT e OPEN_CHAT → non blocco, ma lo aggiungo al body per meta debug
-        if (res.verdict === "SOFT_MISMATCH") {
-          (body as any).__coherenceWarning = res.reason;
-        }
-      }
-    }
-
-    // ======================================================
-    // 2) STAGE INSTRUCTIONS (come prima, ma più “tight”)
-    // ======================================================
-    const stageInstruction =
-      isProject && stage === "OPEN_CHAT"
-        ? [
-            "=== ISTRUZIONI STAGE: OPEN_CHAT (NO PRODUZIONE) ===",
-            "Obiettivo: raccogliere contesto in modo pratico e verificare coerenza col brief.",
-            "Se c'è incoerenza col brief: chiedi UNA conferma secca (sì/no) su cosa produrre.",
-            "Non produrre l'output finale.",
-            "Concludi SEMPRE con: 'Quando vuoi, premi Avvia Produzione.'",
-          ].join("\n")
-        : isProject && stage === "PRODUCTION"
-        ? [
-            "=== ISTRUZIONI STAGE: PRODUZIONE ===",
-            "Ora devi consegnare l'output finale secondo il brief.",
-            "Se mode=breve: consegna 1 versione richiesta + 1 alternativa standard.",
-            "Se mancano dati critici: fai UNA domanda secca e fermati lì.",
-          ].join("\n")
-        : "";
-
-    // ======================================================
-    // 3) BRIEF CONTRACT (se non lo mandi, provo a costruirlo)
-    // ======================================================
-    let briefContract = projectPacket?.briefContract ?? "";
-
-    if (
-      isProject &&
-      projectPacket?.intent === "scrittura" &&
-      projectPacket?.mode === "breve" &&
-      !briefContract
-    ) {
-      const b1 = (projectPacket?.brief?.round1 ?? null) as ScritturaBreveBrief1 | null;
-      const b2 = projectPacket?.brief?.round2 ?? {};
-      if (b1) {
-        // lo trasformo in “contratto” testuale breve
-        const sections = buildScritturaBreveContractAll(b1, b2);
-        briefContract = sections
-          .map((s) => `# ${s.title}\n- ${s.lines.join("\n- ")}`)
-          .join("\n\n");
-      }
-    }
-
-    // ======================================================
-    // 4) EFFECTIVE PROMPT (contesto progetto + brief + stage)
-    // ======================================================
     const effectivePrompt = isProject
-      ? [
-          "=== ANOVA — CONTESTO PROGETTO (non copiare in output) ===",
-          `ProjectId: ${projectPacket?.projectId ?? "n/a"}`,
-          `Intent: ${projectPacket?.intent ?? "n/a"}`,
-          `Mode: ${projectPacket?.mode ?? "n/a"}`,
-          `Stage: ${stage || "n/a"}`,
-          briefContract ? `\n--- BRIEF CONFERMATO (CONTRATTO) ---\n${briefContract}` : "",
-          projectPacket?.contextText ? `\n--- CONTESTO UTENTE ---\n${projectPacket.contextText}` : "",
-          stageInstruction ? `\n${stageInstruction}` : "",
-          "\n=== RICHIESTA UTENTE ===",
-          prompt,
-        ]
-          .filter(Boolean)
-          .join("\n")
+      ? buildEffectivePrompt({
+          projectId: String(projectPacket?.projectId ?? "n/a"),
+          intent: String(projectPacket?.intent ?? "n/a"),
+          mode,
+          stage,
+          contractText,
+          stageInstruction,
+          userPrompt: prompt,
+        })
       : prompt;
 
-    // ======================================================
-    // 5) CALL ORCHESTRATOR / PROVIDER
-    // ======================================================
-    const out = await getAIResponse(effectivePrompt, userId);
+    // ✅ Provider: OPEN_CHAT economico, PRODUCTION più robusto
+    const out =
+      isProject && stage === "PRODUCTION"
+        ? await invokeOpenAIBalanced(effectivePrompt)
+        : await invokeOpenAIEconomic(effectivePrompt);
 
-    // ======================================================
-    // 6) Inject meta warning (SOFT mismatch in OPEN_CHAT)
-    // ======================================================
-    if ((body as any).__coherenceWarning) {
-      const reason = String((body as any).__coherenceWarning);
-      (out as any).meta = (out as any).meta ?? {};
-      (out as any).meta.coherence = { verdict: "SOFT_MISMATCH", reason };
-    }
+    const latencyMs = out?.latencyMs ?? Date.now() - t0;
 
-    // (opzionale) meta minima progetto
-    if (isProject) {
-      (out as any).meta = (out as any).meta ?? {};
-      (out as any).meta.project = {
-        projectId: projectPacket?.projectId ?? null,
-        intent: projectPacket?.intent ?? null,
-        mode: projectPacket?.mode ?? null,
-        stage: stage ?? null,
-      };
-    }
+    // ✅ ProviderId coerenti con la tua UI (openai:econ / openai:mid)
+    const fallbackProvider =
+      isProject && stage === "PRODUCTION" ? "openai:mid" : "openai:econ";
 
-    return NextResponse.json(out, { status: 200 });
+    const raw: ProviderRow[] = [
+      {
+        provider: out?.provider ?? fallbackProvider,
+        text: out?.text ?? "",
+        success: out?.success ?? true,
+        error: out?.error,
+        latencyMs,
+        tokensUsed: out?.tokensUsed ?? 0,
+        promptTokens: out?.promptTokens ?? 0,
+        completionTokens: out?.completionTokens ?? 0,
+        estimatedCost: out?.estimatedCost ?? 0,
+      },
+    ];
+
+    return NextResponse.json(
+      {
+        fusion: {
+          finalText: raw[0].text?.trim() ? raw[0].text : "⚠️ Risposta vuota dal provider.",
+          fusionScore: 1,
+          used: [raw[0].provider],
+        },
+        raw,
+        meta: {
+          // ✅ per sidebar orchestratore
+          contract: {
+            sections: contractSections,
+          },
+          // ✅ contesto utile (debug UI)
+          context: {
+            projectId: projectPacket?.projectId ?? null,
+            intent: projectPacket?.intent ?? null,
+            mode,
+            stage,
+            hasBrief: Boolean(brief1 || brief2),
+            userId: body.userId ?? null,
+            sessionId: body.sessionId ?? null,
+          },
+          stats: {
+            callsThisRequest: 1,
+            providersRequested: [raw[0].provider],
+          },
+          tags: {
+            api: "orchestrate_v2_clean",
+            isProject,
+          },
+        },
+        costThisRequest: raw[0].estimatedCost ?? 0,
+      },
+      { status: 200 }
+    );
   } catch (e: any) {
     console.error("[ANOVA] /api/orchestrate error:", e);
-    return NextResponse.json({ error: e?.message ?? "server_error" }, { status: 500 });
+    return NextResponse.json(
+      { error: e?.message ?? "server_error" },
+      { status: 500 }
+    );
   }
 }
-
-// ⬆️ FINE BLOCCO 14
