@@ -37,11 +37,11 @@
     ".next/types/**/*.ts",
     ".next/dev/types/**/*.ts"
   ],
+
   "exclude": [
     "node_modules",
-    "_deprecated/**",
-    "deprecated/**",
-    "src/_deprecated/**",
-    "src/deprecated/**"
+    "src/lib/providers/anthropic/**",
+    "src/lib/providers/gemini/**"
   ]
 }
+
