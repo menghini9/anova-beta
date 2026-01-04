@@ -9,6 +9,8 @@ const INTENTS = [
   { key: "problema", label: "PROBLEMA", desc: "bug, errori, diagnosi" },
   { key: "decisione", label: "DECISIONE", desc: "opzioni, pro/contro, scelta" },
   { key: "codice", label: "CODICE", desc: "sviluppo, integrazioni, automazioni" },
+  { key: "informazione", label: "INFORMAZIONE", desc: "spiegazioni, ricerca, sintesi, contesto" },
+
 ];
 
 export default function HomePage() {

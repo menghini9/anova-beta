@@ -10,13 +10,17 @@ import { useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
 
 import type { ProjectDoc } from "@/lib/projects/types";
-import type { ScritturaBreveBrief1 } from "@/lib/brief/scrittura/breve/brief1";
-import {
-  buildScritturaBreveContractAll,
-  checkScritturaBreveCoherence,
-} from "@/lib/brief/scrittura/breve/brief2";
-import type { ScritturaBreveBrief3 } from "@/lib/brief/scrittura/breve/brief3";
-import { buildScritturaBreveBrief3Sections } from "@/lib/brief/scrittura/breve/brief3";
+// EMAIL SINGOLA (job attivo)
+// EMAIL SINGOLA (job attivo) — path CORRETTO
+import type { EmailSingolaBrief1 } from "@/lib/jobs/scrittura/email/email_singola/brief1";
+import type { EmailSingolaBrief3 } from "@/lib/jobs/scrittura/email/email_singola/brief3";
+
+import { buildEmailContractAll } from "@/lib/jobs/scrittura/email/email_singola/contract";
+import { buildEmailBrief3Sections } from "@/lib/jobs/scrittura/email/email_singola/brief3";
+
+import { checkEmailSingolaCoherence } from "@/lib/jobs/scrittura/email/email_singola/coherence";
+
+
 
 
 import {
@@ -377,41 +381,46 @@ if (isProjectMode && projectId && project) {
       }
     }
 
-    // COHERENCE GATE (NO-AI)
-    if (isProjectMode && project) {
-      const b1 = ((project as any)?.brief?.round1 ?? {}) as any;
-      const b2 = (project as any)?.brief?.round2 ?? {};
-      const stage = String((project as any)?.stage ?? "");
+// COHERENCE GATE (NO-AI) — job driven
+if (isProjectMode && project) {
+  const intent = String((project as any)?.intent ?? "");
+  const job = String((project as any)?.job ?? (project as any)?.type ?? ""); // fallback
+  const stage = String((project as any)?.stage ?? "");
 
-      const res = checkScritturaBreveCoherence({
-        brief1: b1,
-        brief2: b2,
-        userText: trimmed,
-      });
+  // Solo scrittura, solo EMAIL SINGOLA per ora
+  if (intent === "scrittura" && (job === "email_singola" || job === "email")) {
+    const b1 = ((project as any)?.brief?.round1 ?? {}) as any;
+    const b2 = (project as any)?.brief?.round2 ?? {};
+    const b3 = ((project as any)?.brief?.round3 ?? {}) as any;
 
-      if (res.verdict === "HARD_MISMATCH") {
-        setMismatchWarning(
-          `⚠️ Coerenza brief: ${res.reason}. Allinea il brief (WORK) prima di andare avanti.`
-        );
-        setToastMessage("⛔ Richiesta bloccata: incoerenza col brief.");
+    const res = checkEmailSingolaCoherence({
+      brief1: b1,
+      brief2: b2,
+      brief3: b3,
+      userText: trimmed,
+    });
+
+    if (res.verdict === "HARD_MISMATCH") {
+      setMismatchWarning(`⚠️ Coerenza brief: ${res.reason}. Allinea il brief (WORK) prima di andare avanti.`);
+      setToastMessage("⛔ Richiesta bloccata: incoerenza col brief.");
+      setTimeout(() => setToastMessage(null), 1800);
+      return;
+    }
+
+    if (res.verdict === "SOFT_MISMATCH") {
+      setMismatchWarning(`⚠️ Coerenza brief (soft): ${res.reason}. Se hai cambiato idea, premi “Modifica brief”.`);
+
+      if (stage === "PRODUCTION") {
+        setToastMessage("⛔ Produzione bloccata: allinea il brief.");
         setTimeout(() => setToastMessage(null), 1800);
         return;
       }
-
-      if (res.verdict === "SOFT_MISMATCH") {
-        setMismatchWarning(
-          `⚠️ Coerenza brief (soft): ${res.reason}. Se hai cambiato idea, premi “Modifica brief”.`
-        );
-
-        if (stage === "PRODUCTION") {
-          setToastMessage("⛔ Produzione bloccata: conferma/allinea il brief.");
-          setTimeout(() => setToastMessage(null), 1800);
-          return;
-        }
-      } else {
-        setMismatchWarning(null);
-      }
+    } else {
+      setMismatchWarning(null);
     }
+  }
+}
+
 
     const messagesRef = collection(db, "sessions", sessionId, "messages");
 
@@ -489,20 +498,28 @@ if (isProjectMode && projectId && project) {
 // CONTRATTO (per sidebar orchestratore)
 // =========================
 const contractSections =
-  isProjectMode &&
-  project &&
-  (project as any).intent === "scrittura" &&
-  (project as any).mode === "breve"
-    ? [
-        ...buildScritturaBreveContractAll(
-          ((project as any)?.brief?.round1 ?? {}) as ScritturaBreveBrief1,
-          (project as any)?.brief?.round2 ?? {}
-        ),
-        ...buildScritturaBreveBrief3Sections(
-          ((project as any)?.brief?.round3 ?? {}) as ScritturaBreveBrief3
-        ),
-      ]
+  isProjectMode && project && String((project as any).intent) === "scrittura"
+    ? (() => {
+        const job = String((project as any)?.job ?? (project as any)?.type ?? "");
+
+        // EMAIL SINGOLA (attiva)
+        if (job === "email_singola" || job === "email") {
+          return [
+            ...buildEmailContractAll(
+              ((project as any)?.brief?.round1 ?? {}) as EmailSingolaBrief1,
+              (project as any)?.brief?.round2 ?? {}
+            ),
+            ...buildEmailBrief3Sections(
+              ((project as any)?.brief?.round3 ?? {}) as EmailSingolaBrief3
+            ),
+          ];
+        }
+
+        // altri job: non ancora collegati
+        return null;
+      })()
     : null;
+
 
 
   // -------------------------
@@ -574,31 +591,21 @@ const contractSections =
             </div>
 
             {/* Brief summary */}
-            {showBriefSummary &&
-              (project as any).intent === "scrittura" &&
-              (project as any).mode === "breve" && (
-                <div className="mt-3 rounded-xl border border-white/10 bg-black/30 p-3">
-             {[
-  ...buildScritturaBreveContractAll(
-    ((project as any)?.brief?.round1 ?? {}) as ScritturaBreveBrief1,
-    (project as any)?.brief?.round2 ?? {}
-  ),
-  ...buildScritturaBreveBrief3Sections(
-    ((project as any)?.brief?.round3 ?? {}) as ScritturaBreveBrief3
-  ),
-].map((s) => (
+{showBriefSummary && (project as any).intent === "scrittura" && contractSections && (
+  <div className="mt-3 rounded-xl border border-white/10 bg-black/30 p-3">
+    {contractSections.map((s: any) => (
+      <div key={s.title} className="mt-2 first:mt-0">
+        <div className="font-semibold text-white/90">{s.title}</div>
+        <ul className="list-disc ml-5 mt-1 text-white/70 space-y-0.5">
+          {s.lines.map((l: string) => (
+            <li key={l}>{l}</li>
+          ))}
+        </ul>
+      </div>
+    ))}
+  </div>
+)}
 
-                    <div key={s.title} className="mt-2 first:mt-0">
-                      <div className="font-semibold text-white/90">{s.title}</div>
-                      <ul className="list-disc ml-5 mt-1 text-white/70 space-y-0.5">
-                        {s.lines.map((l) => (
-                          <li key={l}>{l}</li>
-                        ))}
-                      </ul>
-                    </div>
-                  ))}
-                </div>
-              )}
 
             {/* Warning coerenza */}
             {mismatchWarning && (

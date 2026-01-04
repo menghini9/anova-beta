@@ -1,12 +1,12 @@
 // ======================================================
-// ANOVA — API ORCHESTRATE (V4 — SIMPLE FLOW + CONTRACT + BRIEF3)
+// ANOVA — API ORCHESTRATE (V5 — SIMPLE + CONTRACT + JOB)
 // Path: /src/app/api/orchestrate/route.ts
 //
 // Obiettivo:
 // - L’utente scrive -> AI risponde subito.
 // - Usa il CONTRATTO derivato dai brief (1, 2, 3).
-// - Max 3 domande SOLO se mancano dati critici (regola nel prompt, NO Brief4).
-// - Mai: “Contratto completo…”, mai: “Avvia Produzione”.
+// - Max 3 domande SOLO se mancano dati critici.
+// - Mai: recap contratto / “Contratto completo…” / “Avvia Produzione”.
 // - Ritorna anche contractSections per sidebar orchestratore.
 // ======================================================
 
@@ -15,13 +15,13 @@ import { NextResponse } from "next/server";
 // ✅ Provider diretti (stabili)
 import { invokeOpenAIEconomic, invokeOpenAIBalanced } from "@/lib/providers/openai";
 
-// ✅ Contratto base (brief1 + brief2: tua struttura reale)
-import type { ScritturaBreveBrief1 } from "@/lib/brief/scrittura/breve/brief1";
-import { buildScritturaBreveContractAll } from "@/lib/brief/scrittura/breve/brief2";
+// ✅ EMAIL SINGOLA — tipi + builders
+import type { EmailSingolaBrief1 } from "@/lib/jobs/scrittura/email/email_singola/brief1";
+import type { EmailSingolaBrief2 } from "@/lib/jobs/scrittura/email/email_singola/brief2";
+import type { EmailSingolaBrief3 } from "@/lib/jobs/scrittura/email/email_singola/brief3";
 
-// ✅ Brief3 (file singolo coerente con la struttura)
-import type { ScritturaBreveBrief3 } from "@/lib/brief/scrittura/breve/brief3";
-import { buildScritturaBreveBrief3Sections } from "@/lib/brief/scrittura/breve/brief3";
+import { buildEmailContractAll } from "@/lib/jobs/scrittura/email/email_singola/contract";
+import { buildEmailBrief3Sections } from "@/lib/jobs/scrittura/email/email_singola/brief3";
 
 // -------------------------
 // Tipi payload
@@ -29,12 +29,12 @@ import { buildScritturaBreveBrief3Sections } from "@/lib/brief/scrittura/breve/b
 type ProjectPacket = {
   projectId?: string;
   intent?: string;
-  mode?: string;  // breve | guidato | ...
+  job?: string; // es: "email_singola"
   stage?: string; // OPEN_CHAT | PRODUCTION | ...
   brief?: {
     round1?: unknown;
     round2?: unknown;
-    round3?: unknown; // ✅ NEW: brief3 (aperte)
+    round3?: unknown;
   };
 };
 
@@ -57,19 +57,17 @@ type ProviderRow = {
 // -------------------------
 function buildContractSections(brief1: unknown, brief2: unknown, brief3: unknown): ContractSection[] {
   try {
-    // 1) Base: Brief1 + Brief2 (legacy)
-    const base = buildScritturaBreveContractAll(
-      (brief1 ?? {}) as ScritturaBreveBrief1,
-      (brief2 ?? {}) as any
-    ) as any;
+    const base = buildEmailContractAll(
+      (brief1 ?? {}) as EmailSingolaBrief1,
+      (brief2 ?? {}) as EmailSingolaBrief2
+    );
 
     const baseSections: ContractSection[] = (Array.isArray(base) ? base : []).map((s: any) => ({
       title: String(s?.title ?? "Sezione"),
       lines: Array.isArray(s?.lines) ? s.lines.map((l: any) => String(l)) : [],
     }));
 
-    // 2) Extra: Brief3 (aperte)
-    const extra3 = buildScritturaBreveBrief3Sections((brief3 ?? {}) as ScritturaBreveBrief3);
+    const extra3 = buildEmailBrief3Sections((brief3 ?? {}) as EmailSingolaBrief3);
 
     return [...baseSections, ...extra3];
   } catch {
@@ -127,15 +125,18 @@ export async function POST(req: Request) {
     const projectPacket = body.projectPacket;
     const isProject = Boolean(projectPacket?.projectId);
 
-    const stage = (projectPacket?.stage ?? "GENERIC") as string;
-    const mode = (projectPacket?.mode ?? "n/a") as string;
+    const stage = String(projectPacket?.stage ?? "GENERIC");
+    const job = String(projectPacket?.job ?? "n/a");
 
     const brief1 = projectPacket?.brief?.round1 ?? null;
     const brief2 = projectPacket?.brief?.round2 ?? null;
     const brief3 = projectPacket?.brief?.round3 ?? null;
 
-    const contractSections = isProject ? buildContractSections(brief1, brief2, brief3) : [];
-    const contractText = isProject ? contractToText(contractSections) : "";
+    // ✅ Contratto: oggi supportiamo email_singola (gli altri job in futuro)
+    const canBuildContract = isProject && job === "email_singola";
+
+    const contractSections = canBuildContract ? buildContractSections(brief1, brief2, brief3) : [];
+    const contractText = canBuildContract ? contractToText(contractSections) : "";
     const stageInstruction = isProject ? buildStageInstruction(stage) : "";
 
     // ✅ Prompt completo: contratto + regole + richiesta utente
@@ -144,11 +145,11 @@ export async function POST(req: Request) {
           "=== ANOVA — CONTESTO PROGETTO (NON COPIARE IN OUTPUT) ===",
           `ProjectId: ${projectPacket?.projectId ?? "n/a"}`,
           `Intent: ${projectPacket?.intent ?? "n/a"}`,
-          `Mode: ${mode}`,
+          `Job: ${job}`,
           `Stage: ${stage}`,
           "",
-          "--- CONTRATTO (DA BRIEF) ---",
-          contractText,
+          canBuildContract ? "--- CONTRATTO (DA BRIEF) ---" : "--- CONTRATTO ---",
+          canBuildContract ? contractText : "(Contratto non disponibile per questo job, usa solo richiesta utente.)",
           "",
           stageInstruction,
           "",
@@ -197,7 +198,7 @@ export async function POST(req: Request) {
           context: {
             projectId: projectPacket?.projectId ?? null,
             intent: projectPacket?.intent ?? null,
-            mode,
+            job,
             stage,
             hasBrief: Boolean(brief1 || brief2 || brief3),
             userId: body.userId ?? null,
@@ -208,7 +209,7 @@ export async function POST(req: Request) {
             providersRequested: [raw[0].provider],
           },
           tags: {
-            api: "orchestrate_v4_contract_brief3",
+            api: "orchestrate_v5_contract_job",
             isProject,
           },
         },

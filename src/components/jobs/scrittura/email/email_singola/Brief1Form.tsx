@@ -1,53 +1,69 @@
 "use client";
 
 // ======================================================
-// UI — BRIEF 1 (Scrittura / Progetto breve)
-// Path: /src/components/brief/scrittura/ScritturaBreveBrief1.tsx
+// UI — EMAIL SINGOLA — BRIEF 1 (Giro 1)
+// Path: /src/components/jobs/scrittura/email/email_singola/Brief1Form.tsx
 // ======================================================
 
 import { useMemo, useState } from "react";
-import type { ScritturaBreveBrief1 } from "@/lib/brief/scrittura/breve/brief1";
-import {
-  SCRITTURA_BREVE_BRIEF1_DEFAULTS,
-  SCRITTURA_BREVE_BRIEF1_QUESTIONS,
-  validateBrief1,
-} from "@/lib/brief/scrittura/breve/brief1";
 
-export function ScritturaBreveBrief1Form(props: {
-  initial?: Partial<ScritturaBreveBrief1>;
-  onNext: (brief1: ScritturaBreveBrief1) => void;
+import type { EmailSingolaBrief1 } from "@/lib/jobs/scrittura/email/email_singola/brief1";
+import {
+  EMAIL_SINGOLA_BRIEF1_DEFAULT,
+  EMAIL_SINGOLA_BRIEF1_QUESTIONS,
+  validateEmailSingolaBrief1,
+} from "@/lib/jobs/scrittura/email/email_singola/brief1";
+
+
+export default function EmailSingolaBrief1Form(props: {
+  initial?: Partial<EmailSingolaBrief1>;
+  onNext: (brief1: EmailSingolaBrief1) => void;
 }) {
-  const initialMerged = useMemo<ScritturaBreveBrief1>(() => {
+  // =========================
+  // 1) INIT
+  // =========================
+  const initialMerged = useMemo<EmailSingolaBrief1>(() => {
     return {
-      ...SCRITTURA_BREVE_BRIEF1_DEFAULTS,
+      ...EMAIL_SINGOLA_BRIEF1_DEFAULT,
       ...(props.initial ?? {}),
     };
   }, [props.initial]);
 
-  const [form, setForm] = useState<ScritturaBreveBrief1>(initialMerged);
+  const [form, setForm] = useState<EmailSingolaBrief1>(initialMerged);
   const [errors, setErrors] = useState<string[]>([]);
 
-  function update<K extends keyof ScritturaBreveBrief1>(k: K, v: any) {
+  // =========================
+  // 2) HELPERS
+  // =========================
+  function update<K extends keyof EmailSingolaBrief1>(k: K, v: EmailSingolaBrief1[K]) {
     setForm((prev) => ({ ...prev, [k]: v }));
   }
 
   function onSubmit() {
-    const errs = validateBrief1(form);
+    const res = validateEmailSingolaBrief1(form);
+
+    // supporto sia validate che ritorna string[] sia {ok, errors}
+    const errs = Array.isArray(res) ? res : res?.errors ?? [];
+
     setErrors(errs);
     if (errs.length > 0) return;
+
     props.onNext(form);
   }
 
+  // =========================
+  // 3) UI
+  // =========================
   return (
     <div className="max-w-3xl mx-auto">
       <div className="rounded-2xl border border-white/10 bg-white/5 p-6">
-        <div className="text-lg font-semibold">Brief — Giro 1</div>
+        <div className="text-lg font-semibold">Email — Giro 1</div>
         <div className="text-sm text-white/70">
           Compila tutto. La chat resta chiusa finché il brief non è confermato.
         </div>
 
         <div className="mt-6 space-y-5">
-          {SCRITTURA_BREVE_BRIEF1_QUESTIONS.map((q) => {
+          {EMAIL_SINGOLA_BRIEF1_QUESTIONS.map((q: any) => {
             const val = (form as any)[q.id] ?? "";
             const isText = q.type === "text";
 
@@ -65,7 +81,7 @@ export function ScritturaBreveBrief1Form(props: {
                 {isText ? (
                   <input
                     value={val}
-                    onChange={(e) => update(q.id as any, e.target.value)}
+                    onChange={(e) => update(q.id as any, e.target.value as any)}
                     placeholder={q.placeholder}
                     maxLength={q.maxLen ?? 999}
                     className="w-full rounded-xl bg-black/40 border border-white/10 px-4 py-3 text-sm outline-none focus:border-white/25"
@@ -73,7 +89,7 @@ export function ScritturaBreveBrief1Form(props: {
                 ) : (
                   <select
                     value={val}
-                    onChange={(e) => update(q.id as any, e.target.value)}
+                    onChange={(e) => update(q.id as any, e.target.value as any)}
                     className="w-full rounded-xl bg-black/40 border border-white/10 px-4 py-3 text-sm outline-none focus:border-white/25"
                   >
                     {(q.options ?? []).map((o: any) => (
