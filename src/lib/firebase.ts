@@ -1,12 +1,18 @@
-// ⬇️ BLOCCO 6.2 — Configurazione Firebase principale (Anova β)
+// Path: src/lib/firebase.ts
+// ======================================================
+// Firebase Init + Anonymous Auth (robusto)
+// - init safe (no multi-init)
+// - getUserId() cached (no listener multipli)
+// ======================================================
 
 import { initializeApp, getApps, getApp } from "firebase/app";
 import { getFirestore } from "firebase/firestore";
-import { getAuth } from "firebase/auth";
+import { getAuth, onAuthStateChanged, signInAnonymously } from "firebase/auth";
 import { getStorage } from "firebase/storage";
-import { signInAnonymously, onAuthStateChanged } from "firebase/auth";
 
-// ⚙️ Configurazione Firebase — legge le variabili dal file .env.local
+// =========================
+// 0) CONFIG
+// =========================
 const firebaseConfig = {
   apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
   authDomain: process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN,
@@ -16,35 +22,55 @@ const firebaseConfig = {
   appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID,
 };
 
-// 🔒 Evita errori di inizializzazione multipla (Next.js ricarica spesso)
-const app = !getApps().length ? initializeApp(firebaseConfig) : getApp();
+// Guardrail minimale
+if (!firebaseConfig.apiKey || !firebaseConfig.projectId) {
+  console.warn("Firebase env missing: controlla .env.local (NEXT_PUBLIC_FIREBASE_...)");
+}
 
-// 🧠 Moduli principali — esportati per tutto il progetto
-export const db = getFirestore(app);       // Database Firestore
-export const auth = getAuth(app);          // Autenticazione utenti
-export const storage = getStorage(app);    // File e contenuti
+// =========================
+// 1) INIT SAFE
+// =========================
+const app = getApps().length ? getApp() : initializeApp(firebaseConfig);
+
+export const db = getFirestore(app);
+export const auth = getAuth(app);
+export const storage = getStorage(app);
+
 export default app;
 
-// ⬆️ FINE BLOCCO 6.2
-// ⬇️ BLOCCO 6.3 — Login anonimo automatico
-
+// =========================
+// 2) USER ID (ANON AUTH) — CACHED
+// =========================
 let _userId: string | null = null;
+let _userIdPromise: Promise<string> | null = null;
 
-// Restituisce sempre l’UID valido dell’utente
+/**
+ * Restituisce sempre un UID valido.
+ * - Riusa la promise se già in corso
+ * - Non crea listener multipli nel tempo
+ */
 export function getUserId(): Promise<string> {
-  return new Promise((resolve) => {
-    if (_userId) return resolve(_userId);
+  if (_userId) return Promise.resolve(_userId);
+  if (_userIdPromise) return _userIdPromise;
 
-    onAuthStateChanged(auth, async (user) => {
-      if (user) {
-        _userId = user.uid;
-        return resolve(_userId);
-      } else {
+  _userIdPromise = new Promise<string>((resolve) => {
+    const unsub = onAuthStateChanged(auth, async (user) => {
+      try {
+        if (user) {
+          _userId = user.uid;
+          resolve(_userId);
+          return;
+        }
+
         const res = await signInAnonymously(auth);
         _userId = res.user.uid;
-        return resolve(_userId);
+        resolve(_userId);
+      } finally {
+        // IMPORTANTISSIMO: stop listener, no leak
+        unsub();
       }
     });
   });
+
+  return _userIdPromise;
 }
-// ⬆️ FINE BLOCCO 6.3

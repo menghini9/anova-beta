@@ -1,39 +1,30 @@
 "use client";
 // ======================================================
-// ChatPageClient — V6 (LEAN)
+// ChatPageClient — V8 (Multi-session + Tabs + Archivio/Cestino)
 // Path: src/app/chat/ChatPageClient.tsx
-// Obiettivo: Chat + Orchestratore. Stop Archivio/Cestino/Nuova Chat.
+//
+// Risultato:
+// - Archivio: lista chat principali (sessions)
+// - Cestino: sessions deleted=true
+// - Switch session: ripristina tabs+messaggi della session
+// - Tabs: restano come ora (sessions/{sid}/threads/{tid}/messages)
 // ======================================================
 
-import { useSearchParams, useRouter } from "next/navigation";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { FormEvent } from "react";
-
-import type { ProjectDoc } from "@/lib/projects/types";
-// EMAIL SINGOLA (job attivo)
-// EMAIL SINGOLA (job attivo) — path CORRETTO
-import type { EmailSingolaBrief1 } from "@/lib/jobs/scrittura/email/email_singola/brief1";
-import type { EmailSingolaBrief3 } from "@/lib/jobs/scrittura/email/email_singola/brief3";
-
-import { buildEmailContractAll } from "@/lib/jobs/scrittura/email/email_singola/contract";
-import { buildEmailBrief3Sections } from "@/lib/jobs/scrittura/email/email_singola/brief3";
-
-import { checkEmailSingolaCoherence } from "@/lib/jobs/scrittura/email/email_singola/coherence";
-
-
-
 
 import {
   collection,
   addDoc,
-  query,
-  orderBy,
-  onSnapshot,
-  serverTimestamp,
   doc,
+  limit,
+  onSnapshot,
+  orderBy,
+  query,
+  serverTimestamp,
   setDoc,
   updateDoc,
-  limit,
+  where,
 } from "firebase/firestore";
 
 import { db, getUserId } from "@/lib/firebase";
@@ -43,10 +34,29 @@ import ChatHeader from "./components/ChatHeader";
 import ChatMessages from "./components/ChatMessages";
 import ChatInput from "./components/ChatInput";
 import ChatOrchestratorSidebar from "./components/ChatOrchestratorSidebar";
+import ChatSidePanels from "./components/ChatSidePanels";
 
 /* =========================
    TIPI
 ========================= */
+type ProviderId = "openai";
+
+type SessionMetaLite = {
+  id: string;
+  title?: string | null;
+  lastMessage?: string | null;
+  updatedAt?: any;
+};
+
+interface ThreadDoc {
+  id: string;
+  title: string;
+  provider: ProviderId;
+  rules: string;
+  createdAt?: any;
+  updatedAt?: any;
+}
+
 interface Message {
   id?: string;
   sender: "user" | "anova";
@@ -64,6 +74,13 @@ const safeSet = (k: string, v: string) => {
 };
 
 /* =========================
+   HELPERS
+========================= */
+function newId() {
+  return `${Date.now()}_${Math.random().toString(16).slice(2)}`;
+}
+
+/* =========================
    COMPONENT
 ========================= */
 export default function ChatPageClient() {
@@ -71,258 +88,261 @@ export default function ChatPageClient() {
   // 0) USER
   // -------------------------
   const [userId, setUserId] = useState<string | null>(null);
-
   useEffect(() => {
     getUserId().then(setUserId);
   }, []);
 
   // -------------------------
-  // 1) ROUTING / PROJECT MODE
+  // 1) ARCHIVIO / CESTINO (sessions)
   // -------------------------
-  const searchParams = useSearchParams();
-  const router = useRouter();
+  const [sessions, setSessions] = useState<SessionMetaLite[]>([]);
+  const [trashSessions, setTrashSessions] = useState<SessionMetaLite[]>([]);
+  const [showArchive, setShowArchive] = useState(false);
+  const [showTrash, setShowTrash] = useState(false);
 
-  const projectId = searchParams.get("projectId");
-  const isProjectMode = Boolean(projectId);
-
-  const [project, setProject] = useState<(ProjectDoc & { id: string }) | null>(null);
-  const [showBriefSummary, setShowBriefSummary] = useState(false);
-  const [mismatchWarning, setMismatchWarning] = useState<string | null>(null);
+  // inline rename (usato da ChatSidePanels)
+  const [inlineEditId, setInlineEditId] = useState<string | null>(null);
+  const [inlineEditValue, setInlineEditValue] = useState<string>("");
 
   // -------------------------
-  // 2) SESSION + UI CORE
+  // 2) SESSION ATTIVA (chat principale)
   // -------------------------
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [sessionTitle, setSessionTitle] = useState<string>("");
   const [editingTitle, setEditingTitle] = useState<boolean>(false);
 
+  // -------------------------
+  // 3) THREADS (tabs) della session
+  // -------------------------
+  const [threads, setThreads] = useState<ThreadDoc[]>([]);
+  const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
+
+  const activeThread = useMemo(
+    () => threads.find((t) => t.id === activeThreadId) ?? null,
+    [threads, activeThreadId]
+  );
+
+  // -------------------------
+  // 3.1) RULES UI (debounce)
+  // -------------------------
+  const [rulesDraft, setRulesDraft] = useState<string>("");
+  const rulesDebounceRef = useRef<any>(null);
+
+  useEffect(() => {
+    setRulesDraft(activeThread?.rules ?? "");
+  }, [activeThreadId, activeThread?.rules]);
+
+  // -------------------------
+  // 4) MESSAGES (per tab)
+  // -------------------------
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
 
+  // -------------------------
+  // 5) UX
+  // -------------------------
   const [toastMessage, setToastMessage] = useState<string | null>(null);
-
-  // Orchestratore
   const [debugInfo, setDebugInfo] = useState<any | null>(null);
   const [showOrchestrator, setShowOrchestrator] = useState(false);
   const [orchWidth, setOrchWidth] = useState(420);
-// =========================
-// AUTO-KICKOFF (anti doppio run)
-// =========================
-const [autoKickoffRunning, setAutoKickoffRunning] = useState(false);
-
   const bottomRef = useRef<HTMLDivElement | null>(null);
 
   // -------------------------
-  // 3) BOOTSTRAP SESSION (NON PROJECT)
+  // 6) LISTENER: archivio e cestino (sessions)
   // -------------------------
   useEffect(() => {
-    if (!hasWindow()) return;
     if (!userId) return;
-    if (isProjectMode) return; // in project mode sessionId arriva dal progetto
 
-    let sid = safeGet("anovaSessionId");
-    if (!sid) {
-      sid = Date.now().toString();
-      safeSet("anovaSessionId", sid);
-    }
-    setSessionId(sid);
-
-    // assicuro doc sessione (merge)
-    const sessRef = doc(db, "sessions", sid);
-    setDoc(
-      sessRef,
-      {
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-        lastMessage: "Sessione avviata.",
-        deleted: false,
-        owner: userId,
-      },
-      { merge: true }
+    // ARCHIVIO
+    const qArchive = query(
+      collection(db, "sessions"),
+      where("owner", "==", userId),
+      where("deleted", "==", false),
+      orderBy("updatedAt", "desc")
     );
-  }, [userId, isProjectMode]);
 
-  // -------------------------
-  // 4) PROJECT LISTENER (owner check + sessionId)
-  // -------------------------
-  useEffect(() => {
-    if (!isProjectMode) return;
-    if (!userId) return;
-    if (!projectId) return;
-
-    const ref = doc(db, "projects", projectId);
-
-    const unsub = onSnapshot(ref, (snap) => {
-      const data = snap.data() as any;
-      if (!data) return;
-
-      // sicurezza base: progetto non tuo
-      if (data.owner !== userId) {
-        setToastMessage("🔒 Accesso negato: progetto non tuo.");
-        setTimeout(() => setToastMessage(null), 1800);
-        return;
-      }
-
-      setProject({ id: snap.id, ...(data as ProjectDoc) });
-
-      // sessione chat = sessionId del progetto
-      if (data.sessionId) setSessionId(String(data.sessionId));
+    const unsubA = onSnapshot(qArchive, (snap) => {
+      const rows: SessionMetaLite[] = snap.docs.map((d) => ({
+        id: d.id,
+        ...(d.data() as any),
+      }));
+      setSessions(rows);
     });
 
-    return () => unsub();
-  }, [isProjectMode, userId, projectId, projectId]);
+    // CESTINO
+    const qTrash = query(
+      collection(db, "sessions"),
+      where("owner", "==", userId),
+      where("deleted", "==", true),
+      orderBy("updatedAt", "desc")
+    );
+
+    const unsubT = onSnapshot(qTrash, (snap) => {
+      const rows: SessionMetaLite[] = snap.docs.map((d) => ({
+        id: d.id,
+        ...(d.data() as any),
+      }));
+      setTrashSessions(rows);
+    });
+
+    return () => {
+      unsubA();
+      unsubT();
+    };
+  }, [userId]);
 
   // -------------------------
-  // 5) LISTENER SESSIONE ATTIVA (titolo + messaggi)
+  // 7) BOOTSTRAP: session attiva
+  // - se esiste in localStorage -> usa quella
+  // - altrimenti -> prima session archivio
+  // - se non esiste nulla -> crea nuova session
   // -------------------------
-  const activeMsgUnsubRef = useRef<null | (() => void)>(null);
-  const activeTitleUnsubRef = useRef<null | (() => void)>(null);
+  const didPickInitialSessionRef = useRef(false);
 
   useEffect(() => {
-    // cleanup
-    if (activeMsgUnsubRef.current) {
-      activeMsgUnsubRef.current();
-      activeMsgUnsubRef.current = null;
-    }
-    if (activeTitleUnsubRef.current) {
-      activeTitleUnsubRef.current();
-      activeTitleUnsubRef.current = null;
+    if (!userId) return;
+    if (didPickInitialSessionRef.current) return;
+
+    // aspettiamo almeno un giro di lista sessions
+    // (anche vuota va bene, se non c'è nulla creiamo)
+    const saved = safeGet("anovaActiveSessionId");
+
+    if (saved) {
+      didPickInitialSessionRef.current = true;
+      setSessionId(saved);
+      return;
     }
 
+    if (sessions.length > 0) {
+      didPickInitialSessionRef.current = true;
+      setSessionId(sessions[0].id);
+      safeSet("anovaActiveSessionId", sessions[0].id);
+      return;
+    }
+
+    // nessuna session: creiamone una
+    (async () => {
+      const sid = newId();
+      await setDoc(
+        doc(db, "sessions", sid),
+        {
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+          lastMessage: "Sessione avviata.",
+          deleted: false,
+          owner: userId,
+          title: null,
+        },
+        { merge: true }
+      );
+      didPickInitialSessionRef.current = true;
+      setSessionId(sid);
+      safeSet("anovaActiveSessionId", sid);
+    })();
+  }, [userId, sessions]);
+
+  // -------------------------
+  // 8) LISTENER: session doc (title)
+  // -------------------------
+  useEffect(() => {
     if (!sessionId) return;
 
-    // titolo
     const sessRef = doc(db, "sessions", sessionId);
-    activeTitleUnsubRef.current = onSnapshot(sessRef, (snap) => {
+    const unsub = onSnapshot(sessRef, (snap) => {
       const t = (snap.data()?.title || "") as string;
       setSessionTitle(t);
     });
 
-    // messaggi
-    const messagesRef = collection(db, "sessions", sessionId, "messages");
-    const qy = query(messagesRef, orderBy("createdAt", "desc"), limit(50));
+    return () => unsub();
+  }, [sessionId]);
 
-    activeMsgUnsubRef.current = onSnapshot(qy, (snap) => {
-      const rows: Message[] = snap.docs
-        .map((d) => ({ id: d.id, ...(d.data() as any) }))
-        .reverse();
+  // -------------------------
+  // 9) LISTENER THREADS (tabs)
+  // Path: sessions/{sid}/threads
+  // -------------------------
+  const didBootstrapMainRef = useRef(false);
+
+  // reset guard quando cambi session
+  useEffect(() => {
+    didBootstrapMainRef.current = false;
+    setThreads([]);
+    setActiveThreadId(null);
+    setMessages([]);
+    setDebugInfo(null);
+  }, [sessionId]);
+
+  useEffect(() => {
+    if (!sessionId) return;
+    if (!userId) return;
+
+    const threadsRef = collection(db, "sessions", sessionId, "threads");
+    const qy = query(threadsRef, orderBy("createdAt", "asc"));
+
+    const unsub = onSnapshot(qy, async (snap) => {
+      const rows: ThreadDoc[] = snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) }));
+      setThreads(rows);
+
+      // bootstrap main una sola volta per session
+      if (rows.length === 0 && !didBootstrapMainRef.current) {
+        didBootstrapMainRef.current = true;
+
+        const firstId = "main";
+        const ref = doc(db, "sessions", sessionId, "threads", firstId);
+
+        await setDoc(
+          ref,
+          {
+            title: "Main",
+            provider: "openai",
+            rules: "Se ti chiedono chi sei, ti presenti come ANOVA (orchestratore di AI).",
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp(),
+            owner: userId,
+          },
+          { merge: true }
+        );
+
+        setActiveThreadId(firstId);
+        return;
+      }
+
+      if (!activeThreadId && rows.length > 0) {
+        setActiveThreadId(rows[0].id);
+      }
+    });
+
+    return () => unsub();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionId, userId]);
+
+  // -------------------------
+  // 10) LISTENER MESSAGES (per thread/tab)
+  // Path: sessions/{sid}/threads/{tid}/messages
+  // -------------------------
+  useEffect(() => {
+    if (!sessionId) return;
+    if (!activeThreadId) return;
+
+    const messagesRef = collection(db, "sessions", sessionId, "threads", activeThreadId, "messages");
+    const qy = query(messagesRef, orderBy("createdAt", "desc"), limit(80));
+
+    const unsub = onSnapshot(qy, (snap) => {
+      const rows: Message[] = snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) })).reverse();
       setMessages(rows);
     });
 
-    return () => {
-      if (activeMsgUnsubRef.current) activeMsgUnsubRef.current();
-      if (activeTitleUnsubRef.current) activeTitleUnsubRef.current();
-      activeMsgUnsubRef.current = null;
-      activeTitleUnsubRef.current = null;
-    };
-  }, [sessionId]);
-// =========================
-// AUTO-KICKOFF: primo output appena OPEN_CHAT dopo Brief3
-// =========================
-useEffect(() => {
-  if (!isProjectMode) return;
-  if (!projectId || !project) return;
-  if (!sessionId || !userId) return;
+    return () => unsub();
+  }, [sessionId, activeThreadId]);
 
-  const stage = String((project as any)?.stage ?? "");
-  if (stage !== "OPEN_CHAT") return;
-
-  // Deve esistere Brief3 (round3)
-  const hasBrief3 = Boolean((project as any)?.brief?.round3);
-  if (!hasBrief3) return;
-
-  // Se ci sono già messaggi, non rifare kickoff
-  if (messages.length > 0) return;
-
-  // Evita doppio run per re-render
-  if (autoKickoffRunning) return;
-
-  // Evita loop su refresh / riapertura
-  if ((project as any)?.autoKickoffDone) return;
-
-  (async () => {
-    setAutoKickoffRunning(true);
-
-    try {
-      // 1) segna subito sul progetto (persistente)
-      await updateDoc(doc(db, "projects", projectId), {
-        autoKickoffDone: true,
-        updatedAt: serverTimestamp(),
-      });
-
-      // 2) chiama orchestrate con prompt kickoff
-      const kickoffPrompt =
-        "Genera subito una prima versione dell’output richiesto dal CONTRATTO. " +
-        "Se mancano dati davvero critici: fai domande numerate (max 3) e fermati.";
-
-      const res = await fetch("/api/orchestrate", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          prompt: kickoffPrompt,
-          sessionId,
-          userId,
-          projectPacket: {
-            projectId,
-            intent: (project as any)?.intent,
-            mode: (project as any)?.mode,
-            stage: (project as any)?.stage,
-            brief: {
-              round1: (project as any)?.brief?.round1 ?? null,
-              round2: (project as any)?.brief?.round2 ?? null,
-              round3: (project as any)?.brief?.round3 ?? null,
-            },
-          },
-        }),
-      });
-
-      const data = await res.json();
-
-      // 3) aggiorna debug sidebar
-      setDebugInfo({
-        raw: data.raw || [],
-        meta: data.meta || {},
-      });
-
-      const aiResponse =
-        data?.fusion?.finalText || "⚠️ Nessuna risposta utile dall'orchestratore.";
-
-      // 4) salva messaggio anova (così è VISIBILE in chat)
-      const messagesRef = collection(db, "sessions", sessionId, "messages");
-      await addDoc(messagesRef, {
-        sender: "anova",
-        text: aiResponse,
-        createdAt: serverTimestamp(),
-        owner: userId,
-      });
-
-      await updateDoc(doc(db, "sessions", sessionId), {
-        updatedAt: serverTimestamp(),
-        lastMessage: aiResponse,
-      });
-    } catch (err) {
-      console.error("Auto-kickoff error:", err);
-    } finally {
-      setAutoKickoffRunning(false);
-    }
-  })();
-}, [
-  isProjectMode,
-  projectId,
-  project,
-  sessionId,
-  userId,
-  messages.length,
-  autoKickoffRunning,
-]);
-
-  // autoscroll
+  // -------------------------
+  // 11) AUTOSCROLL
+  // -------------------------
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
   // -------------------------
-  // 6) TITLE COMMIT
+  // 12) TITLE COMMIT (session)
   // -------------------------
   const commitActiveTitle = async () => {
     if (!sessionId) return;
@@ -339,90 +359,134 @@ useEffect(() => {
   };
 
   // -------------------------
-  // 7) SEND MESSAGE + ORCHESTRATE
+  // 13) THREAD/TAB ACTIONS
+  // -------------------------
+  async function addThread() {
+    if (!sessionId || !userId) return;
+
+    const id = newId();
+    const ref = doc(db, "sessions", sessionId, "threads", id);
+
+    await setDoc(ref, {
+      title: `Tab ${threads.length + 1}`,
+      provider: "openai",
+      rules: "",
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+      owner: userId,
+    });
+
+    setActiveThreadId(id);
+  }
+
+  async function persistThreadRules(next: string) {
+    if (!sessionId || !activeThreadId) return;
+    await updateDoc(doc(db, "sessions", sessionId, "threads", activeThreadId), {
+      rules: next,
+      updatedAt: serverTimestamp(),
+    });
+  }
+
+  function onRulesChange(next: string) {
+    setRulesDraft(next);
+    if (rulesDebounceRef.current) clearTimeout(rulesDebounceRef.current);
+    rulesDebounceRef.current = setTimeout(() => {
+      persistThreadRules(next);
+    }, 600);
+  }
+
+  function onRulesBlur() {
+    if (!activeThread) return;
+    if (rulesDraft !== (activeThread.rules ?? "")) {
+      persistThreadRules(rulesDraft);
+    }
+  }
+
+  // -------------------------
+  // 14) ARCHIVIO HANDLERS
+  // -------------------------
+  function startInlineRename(id: string, currentTitle?: string | null) {
+    setInlineEditId(id);
+    setInlineEditValue((currentTitle || "").trim());
+  }
+
+  async function commitInlineRename(id: string) {
+    if (!inlineEditId) return;
+    const clean = inlineEditValue.trim();
+
+    await updateDoc(doc(db, "sessions", id), {
+      title: clean ? clean : null,
+      updatedAt: serverTimestamp(),
+    });
+
+    setInlineEditId(null);
+    setInlineEditValue("");
+  }
+
+  async function handleOpenSession(id: string) {
+    setShowArchive(false);
+    setShowTrash(false);
+    setInlineEditId(null);
+    setInlineEditValue("");
+
+    setSessionId(id);
+    safeSet("anovaActiveSessionId", id);
+  }
+
+  async function handleDeleteSession(id: string) {
+    await updateDoc(doc(db, "sessions", id), {
+      deleted: true,
+      updatedAt: serverTimestamp(),
+    });
+  }
+
+  async function handleRestoreSession(id: string) {
+    await updateDoc(doc(db, "sessions", id), {
+      deleted: false,
+      updatedAt: serverTimestamp(),
+    });
+  }
+
+  async function handleNewSession() {
+    if (!userId) return;
+
+    const sid = newId();
+    await setDoc(
+      doc(db, "sessions", sid),
+      {
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+        lastMessage: "Sessione avviata.",
+        deleted: false,
+        owner: userId,
+        title: null,
+      },
+      { merge: true }
+    );
+
+    setSessionId(sid);
+    safeSet("anovaActiveSessionId", sid);
+
+    setToastMessage("✅ Nuova chat creata");
+    setTimeout(() => setToastMessage(null), 1200);
+  }
+
+  // -------------------------
+  // 15) SEND MESSAGE + ORCHESTRATE
   // -------------------------
   const handleSend = async (e: FormEvent) => {
     e.preventDefault();
     const trimmed = input.trim();
-    if (!trimmed || !sessionId) return;
-    
-// ✅ COMANDO LOCALE: avvio produzione senza chiamare l'AI
-if (isProjectMode && projectId && project) {
-  const stage = String((project as any)?.stage ?? "");
-  const cmd = trimmed.toLowerCase().replace(/\s+/g, " ").trim();
+    if (!trimmed) return;
+    if (!sessionId || !activeThreadId) return;
 
-  if (stage === "OPEN_CHAT" && (cmd === "produzione" || cmd === "avvia produzione")) {
-    await updateDoc(doc(db, "projects", projectId), {
-      stage: "PRODUCTION",
-      updatedAt: serverTimestamp(),
-    });
-
-    setInput("");
-    setToastMessage("✅ Produzione avviata (stage=PRODUCTION)");
-    setTimeout(() => setToastMessage(null), 1400);
-    return; // 🔒 IMPORTANTISSIMO: non salvare msg, non chiamare /api/orchestrate
-  }
-}
-
-    // gating: userId pronto
     if (!userId) {
       setToastMessage("⏳ Connessione utente in corso, riprova.");
       setTimeout(() => setToastMessage(null), 1500);
       return;
     }
 
-    // gating progetto: chat attiva solo OPEN_CHAT / PRODUCTION
-    if (isProjectMode) {
-      const st = String((project as any)?.stage ?? "");
-      if (st && st !== "OPEN_CHAT" && st !== "PRODUCTION") {
-        setToastMessage("🔒 Chat chiusa: completa i brief in WORK fino a OPEN_CHAT.");
-        setTimeout(() => setToastMessage(null), 1800);
-        return;
-      }
-    }
-
-// COHERENCE GATE (NO-AI) — job driven
-if (isProjectMode && project) {
-  const intent = String((project as any)?.intent ?? "");
-  const job = String((project as any)?.job ?? (project as any)?.type ?? ""); // fallback
-  const stage = String((project as any)?.stage ?? "");
-
-  // Solo scrittura, solo EMAIL SINGOLA per ora
-  if (intent === "scrittura" && (job === "email_singola" || job === "email")) {
-    const b1 = ((project as any)?.brief?.round1 ?? {}) as any;
-    const b2 = (project as any)?.brief?.round2 ?? {};
-    const b3 = ((project as any)?.brief?.round3 ?? {}) as any;
-
-    const res = checkEmailSingolaCoherence({
-      brief1: b1,
-      brief2: b2,
-      brief3: b3,
-      userText: trimmed,
-    });
-
-    if (res.verdict === "HARD_MISMATCH") {
-      setMismatchWarning(`⚠️ Coerenza brief: ${res.reason}. Allinea il brief (WORK) prima di andare avanti.`);
-      setToastMessage("⛔ Richiesta bloccata: incoerenza col brief.");
-      setTimeout(() => setToastMessage(null), 1800);
-      return;
-    }
-
-    if (res.verdict === "SOFT_MISMATCH") {
-      setMismatchWarning(`⚠️ Coerenza brief (soft): ${res.reason}. Se hai cambiato idea, premi “Modifica brief”.`);
-
-      if (stage === "PRODUCTION") {
-        setToastMessage("⛔ Produzione bloccata: allinea il brief.");
-        setTimeout(() => setToastMessage(null), 1800);
-        return;
-      }
-    } else {
-      setMismatchWarning(null);
-    }
-  }
-}
-
-
-    const messagesRef = collection(db, "sessions", sessionId, "messages");
+    const messagesRef = collection(db, "sessions", sessionId, "threads", activeThreadId, "messages");
 
     // 1) salva msg utente
     await addDoc(messagesRef, {
@@ -439,7 +503,7 @@ if (isProjectMode && project) {
 
     setInput("");
 
-    // 2) chiamata orchestratore
+    // 2) chiama orchestrate
     let aiResponse = "Elaborazione in corso...";
 
     try {
@@ -450,21 +514,12 @@ if (isProjectMode && project) {
           prompt: trimmed,
           sessionId,
           userId,
-          projectPacket: isProjectMode
-            ? {
-                projectId,
-                // NB: se in futuro togli intent, qui lo lasciamo solo se esiste
-                intent: (project as any)?.intent,
-                mode: (project as any)?.mode,
-                stage: (project as any)?.stage,
-             brief: {
-  round1: (project as any)?.brief?.round1 ?? null,
-  round2: (project as any)?.brief?.round2 ?? null,
-  round3: (project as any)?.brief?.round3 ?? null, // ✅ NEW
-},
-
-              }
-            : undefined,
+          thread: {
+            id: activeThreadId,
+            title: activeThread?.title ?? "",
+            provider: activeThread?.provider ?? "openai",
+            rules: rulesDraft ?? activeThread?.rules ?? "",
+          },
         }),
       });
 
@@ -475,10 +530,10 @@ if (isProjectMode && project) {
         meta: data.meta || {},
       });
 
-      aiResponse = data?.fusion?.finalText || "⚠️ Nessuna risposta utile dall'orchestratore.";
+      aiResponse = data?.finalText || data?.fusion?.finalText || "⚠️ Nessuna risposta utile.";
     } catch (err) {
       console.error("Errore chiamata orchestratore:", err);
-      aiResponse = "❌ Errore nel motore cognitivo. Riprova.";
+      aiResponse = "❌ Errore nel motore. Riprova.";
     }
 
     // 3) salva risposta anova
@@ -494,41 +549,32 @@ if (isProjectMode && project) {
       lastMessage: aiResponse,
     });
   };
-// =========================
-// CONTRATTO (per sidebar orchestratore)
-// =========================
-const contractSections =
-  isProjectMode && project && String((project as any).intent) === "scrittura"
-    ? (() => {
-        const job = String((project as any)?.job ?? (project as any)?.type ?? "");
-
-        // EMAIL SINGOLA (attiva)
-        if (job === "email_singola" || job === "email") {
-          return [
-            ...buildEmailContractAll(
-              ((project as any)?.brief?.round1 ?? {}) as EmailSingolaBrief1,
-              (project as any)?.brief?.round2 ?? {}
-            ),
-            ...buildEmailBrief3Sections(
-              ((project as any)?.brief?.round3 ?? {}) as EmailSingolaBrief3
-            ),
-          ];
-        }
-
-        // altri job: non ancora collegati
-        return null;
-      })()
-    : null;
-
-
 
   // -------------------------
-  // 8) UI
+  // 16) UI
   // -------------------------
   const handleToggleOrchestrator = () => setShowOrchestrator((v) => !v);
 
   return (
     <main className="h-screen w-screen flex bg-black text-neutral-100 relative overflow-hidden">
+      {/* ARCHIVIO + CESTINO */}
+      <ChatSidePanels
+        showArchive={showArchive}
+        showTrash={showTrash}
+        setShowArchive={setShowArchive}
+        setShowTrash={setShowTrash}
+        sessions={sessions}
+        trashSessions={trashSessions}
+        inlineEditId={inlineEditId}
+        inlineEditValue={inlineEditValue}
+        setInlineEditValue={setInlineEditValue}
+        startInlineRename={startInlineRename}
+        commitInlineRename={commitInlineRename}
+        handleOpenSession={handleOpenSession}
+        handleDeleteSession={handleDeleteSession}
+        handleRestoreSession={handleRestoreSession}
+      />
+
       {/* Colonna centrale */}
       <div
         className="flex-1 flex flex-col transition-all duration-200"
@@ -537,108 +583,6 @@ const contractSections =
           marginRight: showOrchestrator ? `${orchWidth}px` : 0,
         }}
       >
-        {/* Banner progetto */}
-        {isProjectMode && project && (
-          <div className="border-b border-neutral-800 bg-neutral-950 px-6 py-3 text-sm">
-            <div className="flex items-center justify-between gap-3">
-              <div className="text-neutral-300">
-                Progetto:{" "}
-                <b className="text-white">{(project as any).intent?.toUpperCase()}</b> — Mode:{" "}
-                <b className="text-white">{String((project as any).mode ?? "").toUpperCase()}</b> — Stage:{" "}
-                <b className="text-white">{String((project as any).stage ?? "")}</b>
-              </div>
-
-              <div className="flex items-center gap-2">
-                <button
-                  className="border border-white/15 bg-white/0 hover:bg-white/5 px-3 py-1.5 rounded-lg font-medium transition"
-                  onClick={() => setShowBriefSummary((v) => !v)}
-                >
-                  {showBriefSummary ? "Nascondi brief" : "Mostra brief"}
-                </button>
-
-                <button
-                  className="border border-white/15 bg-white/0 hover:bg-white/5 px-3 py-1.5 rounded-lg font-medium transition"
-                  onClick={async () => {
-                    if (!projectId) return;
-                    await updateDoc(doc(db, "projects", projectId), {
-                      stage: "BRIEF_1",
-                      updatedAt: serverTimestamp(),
-                    });
-                    router.push(`/work/p/${projectId}`);
-                  }}
-                >
-                  Modifica brief
-                </button>
-
-                {(project as any).stage === "OPEN_CHAT" && (
-                  <button
-                    className="bg-white text-black px-3 py-1.5 rounded-lg font-medium hover:bg-neutral-200 transition"
-                    style={{ color: "#000" }}
-                    onClick={async () => {
-                      if (!projectId) return;
-                      await updateDoc(doc(db, "projects", projectId), {
-                        stage: "PRODUCTION",
-                        updatedAt: serverTimestamp(),
-                      });
-                      setToastMessage("✅ Produzione avviata");
-                      setTimeout(() => setToastMessage(null), 1200);
-                    }}
-                  >
-                    Avvia Produzione
-                  </button>
-                )}
-              </div>
-            </div>
-
-            {/* Brief summary */}
-{showBriefSummary && (project as any).intent === "scrittura" && contractSections && (
-  <div className="mt-3 rounded-xl border border-white/10 bg-black/30 p-3">
-    {contractSections.map((s: any) => (
-      <div key={s.title} className="mt-2 first:mt-0">
-        <div className="font-semibold text-white/90">{s.title}</div>
-        <ul className="list-disc ml-5 mt-1 text-white/70 space-y-0.5">
-          {s.lines.map((l: string) => (
-            <li key={l}>{l}</li>
-          ))}
-        </ul>
-      </div>
-    ))}
-  </div>
-)}
-
-
-            {/* Warning coerenza */}
-            {mismatchWarning && (
-              <div className="mt-3 rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 text-amber-200">
-                <div className="font-semibold">Coerenza brief</div>
-                <div className="text-sm mt-1">{mismatchWarning}</div>
-                <div className="mt-2 flex gap-2">
-                  <button
-                    className="bg-amber-300 text-black px-3 py-1.5 rounded-lg font-medium hover:bg-amber-200 transition"
-                    onClick={async () => {
-                      if (!projectId) return;
-                      await updateDoc(doc(db, "projects", projectId), {
-                        stage: "BRIEF_1",
-                        updatedAt: serverTimestamp(),
-                      });
-                      router.push(`/work/p/${projectId}`);
-                    }}
-                  >
-                    Aggiorna brief
-                  </button>
-                  <button
-                    className="border border-amber-500/30 px-3 py-1.5 rounded-lg font-medium hover:bg-amber-500/10 transition"
-                    onClick={() => setMismatchWarning(null)}
-                  >
-                    Ignora
-                  </button>
-                </div>
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* Header chat (solo Orchestratore + rename titolo) */}
         <ChatHeader
           sessionId={sessionId}
           sessionTitle={sessionTitle}
@@ -646,40 +590,72 @@ const contractSections =
           editingTitle={editingTitle}
           setEditingTitle={setEditingTitle}
           onCommitTitle={commitActiveTitle}
+          onOpenArchive={() => {
+            setShowTrash(false);
+            setShowArchive(true);
+          }}
+          onOpenTrash={() => {
+            setShowArchive(false);
+            setShowTrash(true);
+          }}
+          onNewSession={handleNewSession}
+          onAddTab={addThread}
           showOrchestrator={showOrchestrator}
           onToggleOrchestrator={handleToggleOrchestrator}
         />
 
-        <ChatMessages messages={messages} bottomRef={bottomRef} />
+        {/* Tabs bar + Rules box */}
+        <div className="border-b border-neutral-800 bg-neutral-950 px-4 py-2">
+          <div className="flex items-center gap-2 overflow-x-auto">
+            {threads.map((t) => (
+              <button
+                key={t.id}
+                onClick={() => setActiveThreadId(t.id)}
+                className={`shrink-0 rounded-lg px-3 py-1.5 text-sm border transition ${
+                  t.id === activeThreadId
+                    ? "border-white/25 bg-white/10 text-white"
+                    : "border-white/10 bg-white/0 text-white/70 hover:bg-white/5"
+                }`}
+              >
+                {t.title || "Tab"}
+                <span className="ml-2 text-[11px] text-white/40">{t.provider}</span>
+              </button>
+            ))}
 
-        <ChatInput
-          input={input}
-          setInput={setInput}
-          onSend={handleSend}
-          disabled={
-            Boolean(
-              isProjectMode &&
-                project &&
-                (project as any).stage !== "OPEN_CHAT" &&
-                (project as any).stage !== "PRODUCTION"
-            )
-          }
-          disabledHint="Chat chiusa: completa i brief in WORK fino a OPEN_CHAT."
-          onBlocked={() => {
-            setToastMessage("🔒 Chat chiusa: completa i brief in WORK.");
-            setTimeout(() => setToastMessage(null), 1400);
-          }}
-        />
+            <button
+              onClick={addThread}
+              className="shrink-0 rounded-lg px-3 py-1.5 text-sm border border-white/15 bg-white/0 hover:bg-white/5"
+              title="Aggiungi sotto-chat"
+            >
+              + Tab
+            </button>
+          </div>
+
+          <div className="mt-2">
+            <div className="text-xs text-white/60 mb-1">Regole (solo per questa tab)</div>
+            <textarea
+              value={rulesDraft}
+              onChange={(e) => onRulesChange(e.target.value)}
+              onBlur={onRulesBlur}
+              placeholder="Scrivi regole operative. Più lunghe = più token."
+              rows={3}
+              className="w-full rounded-xl bg-black/40 border border-white/10 px-3 py-2 text-sm outline-none focus:border-white/25"
+            />
+          </div>
+        </div>
+
+        <ChatMessages messages={messages} bottomRef={bottomRef} />
+        <ChatInput input={input} setInput={setInput} onSend={handleSend} disabled={false} />
       </div>
 
-      {/* Sidebar orchestratore */}
+      {/* Sidebar orchestratore (debug) */}
       <ChatOrchestratorSidebar
         open={showOrchestrator}
         width={orchWidth}
         setWidth={setOrchWidth}
         onClose={() => setShowOrchestrator(false)}
         debugInfo={debugInfo}
-        contract={contractSections}
+        contract={null}
       />
 
       {/* Toast */}

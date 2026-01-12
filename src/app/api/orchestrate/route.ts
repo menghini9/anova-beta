@@ -1,13 +1,12 @@
 // ======================================================
-// ANOVA — API ORCHESTRATE (V5 — SIMPLE + CONTRACT + JOB)
+// ANOVA — API ORCHESTRATE (V6 — NO LEGACY)
 // Path: /src/app/api/orchestrate/route.ts
 //
 // Obiettivo:
-// - L’utente scrive -> AI risponde subito.
-// - Usa il CONTRATTO derivato dai brief (1, 2, 3).
-// - Max 3 domande SOLO se mancano dati critici.
-// - Mai: recap contratto / “Contratto completo…” / “Avvia Produzione”.
-// - Ritorna anche contractSections per sidebar orchestratore.
+// - Chat immediata (open chat) + supporto projectPacket
+// - NESSUNA dipendenza da _legacy
+// - ContractSections sempre disponibili (sidebar orchestratore)
+// - Se mancano dati critici: max 3 domande numerate
 // ======================================================
 
 import { NextResponse } from "next/server";
@@ -15,16 +14,8 @@ import { NextResponse } from "next/server";
 // ✅ Provider diretti (stabili)
 import { invokeOpenAIEconomic, invokeOpenAIBalanced } from "@/lib/providers/openai";
 
-// ✅ EMAIL SINGOLA — tipi + builders
-import type { EmailSingolaBrief1 } from "@/lib/jobs/scrittura/email/email_singola/brief1";
-import type { EmailSingolaBrief2 } from "@/lib/jobs/scrittura/email/email_singola/brief2";
-import type { EmailSingolaBrief3 } from "@/lib/jobs/scrittura/email/email_singola/brief3";
-
-import { buildEmailContractAll } from "@/lib/jobs/scrittura/email/email_singola/contract";
-import { buildEmailBrief3Sections } from "@/lib/jobs/scrittura/email/email_singola/brief3";
-
 // -------------------------
-// Tipi payload
+// Tipi payload (NO legacy)
 // -------------------------
 type ProjectPacket = {
   projectId?: string;
@@ -35,6 +26,14 @@ type ProjectPacket = {
     round1?: unknown;
     round2?: unknown;
     round3?: unknown;
+  };
+
+  // OPTIONAL: se la UI te lo passa, lo usiamo come "contratto operativo"
+  thread?: {
+    id?: string;
+    title?: string;
+    provider?: string;
+    rules?: string;
   };
 };
 
@@ -53,31 +52,50 @@ type ProviderRow = {
 };
 
 // -------------------------
-// Contract builder (UI + Prompt)
+// Contract builder (NO legacy)
+// - Prima fonte: thread.rules (regole per tab)
+// - Seconda fonte: brief JSON (round1/2/3) se presente
 // -------------------------
-function buildContractSections(brief1: unknown, brief2: unknown, brief3: unknown): ContractSection[] {
-  try {
-    const base = buildEmailContractAll(
-      (brief1 ?? {}) as EmailSingolaBrief1,
-      (brief2 ?? {}) as EmailSingolaBrief2
-    );
+function buildContractSectionsNoLegacy(args: {
+  job?: string;
+  stage?: string;
+  threadRules?: string;
+  brief1?: unknown;
+  brief2?: unknown;
+  brief3?: unknown;
+}): ContractSection[] {
+  const { job, stage, threadRules, brief1, brief2, brief3 } = args;
 
-    const baseSections: ContractSection[] = (Array.isArray(base) ? base : []).map((s: any) => ({
-      title: String(s?.title ?? "Sezione"),
-      lines: Array.isArray(s?.lines) ? s.lines.map((l: any) => String(l)) : [],
-    }));
+  const sections: ContractSection[] = [];
 
-    const extra3 = buildEmailBrief3Sections((brief3 ?? {}) as EmailSingolaBrief3);
-
-    return [...baseSections, ...extra3];
-  } catch {
-    return [
-      {
-        title: "BRIEF_JSON (fallback)",
-        lines: [JSON.stringify({ brief1, brief2, brief3 }, null, 2)],
-      },
-    ];
+  const rulesClean = (threadRules ?? "").trim();
+  if (rulesClean) {
+    sections.push({
+      title: "REGOLE (TAB)",
+      lines: rulesClean
+        .split("\n")
+        .map((l) => l.trim())
+        .filter(Boolean),
+    });
   }
+
+  // Se esiste un brief, lo mostriamo in modo “auditabile”
+  const hasBrief = Boolean(brief1 || brief2 || brief3);
+  if (hasBrief) {
+    sections.push({
+      title: "BRIEF_JSON",
+      lines: [JSON.stringify({ job, stage, brief1, brief2, brief3 }, null, 2)],
+    });
+  }
+
+  if (sections.length === 0) {
+    sections.push({
+      title: "CONTRATTO",
+      lines: ["(Nessun contratto disponibile: usa solo richiesta utente e regole di stage.)"],
+    });
+  }
+
+  return sections;
 }
 
 function contractToText(sections: ContractSection[]): string {
@@ -114,13 +132,16 @@ export async function POST(req: Request) {
       prompt?: unknown;
       userId?: string;
       sessionId?: string;
+
+      // ✅ compat: a volte arriva "thread" dalla chat
+      thread?: { id?: string; title?: string; provider?: string; rules?: string };
+
+      // ✅ compat: progetto/brief
       projectPacket?: ProjectPacket;
     };
 
     const prompt = typeof body.prompt === "string" ? body.prompt.trim() : "";
-    if (!prompt) {
-      return NextResponse.json({ error: "missing_prompt" }, { status: 400 });
-    }
+    if (!prompt) return NextResponse.json({ error: "missing_prompt" }, { status: 400 });
 
     const projectPacket = body.projectPacket;
     const isProject = Boolean(projectPacket?.projectId);
@@ -132,33 +153,44 @@ export async function POST(req: Request) {
     const brief2 = projectPacket?.brief?.round2 ?? null;
     const brief3 = projectPacket?.brief?.round3 ?? null;
 
-    // ✅ Contratto: oggi supportiamo email_singola (gli altri job in futuro)
-    const canBuildContract = isProject && job === "email_singola";
+    // regole: priorità a thread.rules (tab), poi projectPacket.thread.rules
+    const threadRules =
+      String(body.thread?.rules ?? "") ||
+      String(projectPacket?.thread?.rules ?? "");
 
-    const contractSections = canBuildContract ? buildContractSections(brief1, brief2, brief3) : [];
-    const contractText = canBuildContract ? contractToText(contractSections) : "";
-    const stageInstruction = isProject ? buildStageInstruction(stage) : "";
+    // ✅ ContractSections sempre disponibili
+    const contractSections = buildContractSectionsNoLegacy({
+      job,
+      stage,
+      threadRules,
+      brief1,
+      brief2,
+      brief3,
+    });
+
+    const contractText = contractToText(contractSections);
+    const stageInstruction = isProject ? buildStageInstruction(stage) : buildStageInstruction("OPEN_CHAT");
 
     // ✅ Prompt completo: contratto + regole + richiesta utente
-    const effectivePrompt = isProject
-      ? [
-          "=== ANOVA — CONTESTO PROGETTO (NON COPIARE IN OUTPUT) ===",
-          `ProjectId: ${projectPacket?.projectId ?? "n/a"}`,
-          `Intent: ${projectPacket?.intent ?? "n/a"}`,
-          `Job: ${job}`,
-          `Stage: ${stage}`,
-          "",
-          canBuildContract ? "--- CONTRATTO (DA BRIEF) ---" : "--- CONTRATTO ---",
-          canBuildContract ? contractText : "(Contratto non disponibile per questo job, usa solo richiesta utente.)",
-          "",
-          stageInstruction,
-          "",
-          "=== RICHIESTA UTENTE (QUESTA È LA PARTE PIÙ IMPORTANTE) ===",
-          prompt,
-        ]
-          .filter(Boolean)
-          .join("\n")
-      : prompt;
+    const effectivePrompt = [
+      "=== ANOVA — CONTESTO (NON COPIARE IN OUTPUT) ===",
+      `SessionId: ${body.sessionId ?? "n/a"}`,
+      `UserId: ${body.userId ?? "n/a"}`,
+      isProject ? `ProjectId: ${projectPacket?.projectId ?? "n/a"}` : "ProjectId: n/a",
+      isProject ? `Intent: ${projectPacket?.intent ?? "n/a"}` : "Intent: n/a",
+      `Job: ${job}`,
+      `Stage: ${stage}`,
+      "",
+      "--- CONTRATTO / REGOLE ---",
+      contractText,
+      "",
+      stageInstruction,
+      "",
+      "=== RICHIESTA UTENTE (QUESTA È LA PARTE PIÙ IMPORTANTE) ===",
+      prompt,
+    ]
+      .filter(Boolean)
+      .join("\n");
 
     // ✅ Provider: in PRODUCTION usi balanced, altrimenti econ
     const out =
@@ -171,7 +203,8 @@ export async function POST(req: Request) {
     const raw: ProviderRow[] = [
       {
         provider:
-          out?.provider ?? (isProject && stage === "PRODUCTION" ? "openai:mid" : "openai:econ"),
+          out?.provider ??
+          (isProject && stage === "PRODUCTION" ? "openai:mid" : "openai:econ"),
         text: out?.text ?? "",
         success: out?.success ?? true,
         error: out?.error,
@@ -209,7 +242,7 @@ export async function POST(req: Request) {
             providersRequested: [raw[0].provider],
           },
           tags: {
-            api: "orchestrate_v5_contract_job",
+            api: "orchestrate_v6_no_legacy",
             isProject,
           },
         },

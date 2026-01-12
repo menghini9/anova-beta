@@ -1,8 +1,7 @@
 "use client";
 // ======================================================
-// ChatHeader (V2 MIN)
-// Path: /src/app/chat/components/ChatHeader.tsx
-// Obiettivo: SOLO titolo sessione + toggle Orchestratore
+// ChatHeader — V4 (Archive/Trash/NewChat + +Tab + Orchestratore)
+// Path: src/app/chat/components/ChatHeader.tsx
 // ======================================================
 
 import type { Dispatch, SetStateAction } from "react";
@@ -15,6 +14,15 @@ type Props = {
   setEditingTitle: Dispatch<SetStateAction<boolean>>;
   onCommitTitle: () => void;
 
+  // Session actions
+  onOpenArchive: () => void;
+  onOpenTrash: () => void;
+  onNewSession: () => void;
+
+  // Tab
+  onAddTab: () => void;
+
+  // Orchestratore
   showOrchestrator: boolean;
   onToggleOrchestrator: () => void;
 };
@@ -26,6 +34,10 @@ export default function ChatHeader({
   editingTitle,
   setEditingTitle,
   onCommitTitle,
+  onOpenArchive,
+  onOpenTrash,
+  onNewSession,
+  onAddTab,
   showOrchestrator,
   onToggleOrchestrator,
 }: Props) {
@@ -37,6 +49,30 @@ export default function ChatHeader({
         </h2>
 
         <div className="flex items-center gap-2">
+          <button
+            onClick={onOpenArchive}
+            className="text-xs px-2 py-1 border border-neutral-800 rounded-lg text-neutral-400 hover:text-white hover:border-neutral-500"
+            title="Apri archivio chat"
+          >
+            Archivio
+          </button>
+
+          <button
+            onClick={onOpenTrash}
+            className="text-xs px-2 py-1 border border-neutral-800 rounded-lg text-neutral-400 hover:text-white hover:border-neutral-500"
+            title="Apri cestino"
+          >
+            Cestino
+          </button>
+
+          <button
+            onClick={onNewSession}
+            className="text-xs px-2 py-1 border border-white/20 rounded-lg text-white/80 hover:text-white hover:bg-white/5"
+            title="Nuova chat principale"
+          >
+            + Chat
+          </button>
+
           {editingTitle ? (
             <input
               value={sessionTitle}
@@ -51,7 +87,7 @@ export default function ChatHeader({
             <button
               onClick={() => setEditingTitle(true)}
               className="text-xs px-2 py-1 border border-neutral-800 rounded-lg text-neutral-400 hover:text-white hover:border-neutral-500"
-              title="Rinomina sessione"
+              title="Rinomina chat principale"
             >
               {sessionTitle?.trim()
                 ? sessionTitle
@@ -64,6 +100,14 @@ export default function ChatHeader({
       </div>
 
       <div className="flex items-center gap-3">
+        <button
+          onClick={onAddTab}
+          className="px-3 py-1 text-sm border border-white/20 rounded-lg hover:bg-white/5 transition"
+          title="Aggiungi sotto-chat (tab)"
+        >
+          + Tab
+        </button>
+
         <button
           onClick={onToggleOrchestrator}
           className="px-3 py-1 text-sm border border-neutral-700 rounded-lg hover:bg-neutral-900 transition"
