@@ -1,66 +1,39 @@
-// ⬇️ BLOCCO 15.3 — ChatInput (barra input) — GATED
-import type { Dispatch, SetStateAction } from "react";
+"use client";
+
+import type { FormEvent } from "react";
 
 type Props = {
   input: string;
-  setInput: Dispatch<SetStateAction<string>>;
-  onSend: (e: React.FormEvent) => void;
-
-  // ✅ Gating “industriale”
+  setInput: (v: string) => void;
+  onSend: (e: FormEvent) => void | Promise<void>;
   disabled?: boolean;
-  disabledHint?: string;
-  onBlocked?: () => void; // es. mostra toast
 };
 
-export default function ChatInput({
-  input,
-  setInput,
-  onSend,
-  disabled = false,
-  disabledHint = "Input disabilitato.",
-  onBlocked,
-}: Props) {
-  const handleSubmit = (e: React.FormEvent) => {
-    if (disabled) {
-      e.preventDefault();
-      onBlocked?.();
-      return;
-    }
-    onSend(e);
-  };
-
+export default function ChatInput({ input, setInput, onSend, disabled }: Props) {
   return (
-    <form
-      onSubmit={handleSubmit}
-      className="flex items-center gap-3 border-t border-neutral-800 px-6 py-4 bg-black"
-    >
-      <input
-        type="text"
-        value={input}
-        onChange={(e) => setInput(e.target.value)}
-        placeholder={disabled ? disabledHint : "Scrivi un messaggio..."}
-        disabled={disabled}
-        className={[
-          "flex-1 border rounded-lg px-4 py-2 text-sm focus:outline-none",
-          disabled
-            ? "bg-neutral-950 border-neutral-900 text-neutral-600 cursor-not-allowed"
-            : "bg-neutral-900 border-neutral-800 text-neutral-100 focus:border-white",
-        ].join(" ")}
-      />
+    <form onSubmit={onSend} className="border-t border-neutral-800 bg-black/80 backdrop-blur px-4 py-4">
+      <div className="mx-auto max-w-4xl flex gap-3 items-end">
+        <div className="flex-1">
+          <textarea
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            disabled={disabled}
+            rows={2}
+            placeholder="Scrivi un messaggio…"
+            className="w-full resize-none rounded-2xl bg-neutral-950 border border-white/10 px-4 py-3 text-sm text-white outline-none focus:border-white/25 disabled:opacity-60"
+          />
+          <div className="mt-2 text-[11px] text-white/30">
+            Invio = Enter • A capo = Shift+Enter
+          </div>
+        </div>
 
-      <button
-        type="submit"
-        disabled={disabled}
-        className={[
-          "font-medium px-5 py-2 rounded-lg transition",
-          disabled
-            ? "bg-neutral-800 text-neutral-500 cursor-not-allowed"
-            : "bg-white text-black hover:bg-neutral-200",
-        ].join(" ")}
-      >
-        Invia
-      </button>
+        <button
+          disabled={disabled}
+          className="shrink-0 rounded-2xl border border-white/15 px-5 py-3 text-sm text-white/90 hover:bg-white/5 disabled:opacity-60"
+        >
+          Invia
+        </button>
+      </div>
     </form>
   );
 }
-// ⬆️ FINE BLOCCO 15.3 — ChatInput

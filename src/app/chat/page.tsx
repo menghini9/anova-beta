@@ -1,20 +1,10 @@
 // Path: src/app/chat/page.tsx
 export const dynamic = "force-dynamic";
 export const fetchCache = "force-no-store";
+<div className="p-6 text-white bg-red-600 rounded-2xl">TAILWIND TEST</div>
 
-import { Suspense } from "react";
-import ChatPageClient from "./ChatPageClient";
+import ChatShell from "./ChatShell";
 
 export default function Page() {
-  return (
-    <Suspense
-      fallback={
-        <div className="min-h-screen bg-black text-white p-6">
-          Caricamento chat…
-        </div>
-      }
-    >
-      <ChatPageClient />
-    </Suspense>
-  );
+  return <ChatShell />;
 }

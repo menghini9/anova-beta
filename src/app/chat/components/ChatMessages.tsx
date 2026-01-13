@@ -1,44 +1,42 @@
-// ⬇️ BLOCCO 15.2 — ChatMessages (lista messaggi)
-import type { RefObject } from "react";
+"use client";
 
-type ChatMessage = {
-  id?: string;
-  sender: "user" | "anova";
-  text: string;
-};
+import type { RefObject } from "react";
+import type { ChatMessage } from "@/lib/chat/types";
 
 type Props = {
   messages: ChatMessage[];
-  bottomRef: RefObject<HTMLDivElement | null>; // ← FIX TIPI
+  bottomRef: RefObject<HTMLDivElement | null>;
 };
 
-export default function ChatMessages({ messages, bottomRef }: Props) {
+export default function ChatMessagesView({ messages, bottomRef }: Props) {
   return (
-    <section className="flex-1 overflow-y-auto p-6 space-y-4 bg-black">
-      {messages.length === 0 ? (
-        <div className="flex h-full items-center justify-center text-neutral-600 text-center">
-          Nessun messaggio ancora. Inizia a dialogare con Anova β.
-        </div>
-      ) : (
-        messages.map((msg) => (
-          <div
-            key={msg.id ?? Math.random()}
-            className={`max-w-2xl mx-auto rounded-xl p-4 ${
-              msg.sender === "user"
-                ? "bg-neutral-900 border border-neutral-700 text-right"
-                : "bg-neutral-800 border border-neutral-700 text-left"
-            }`}
-          >
-            <p className="text-sm leading-relaxed whitespace-pre-wrap">
-              {msg.text}
-            </p>
-          </div>
-        ))
-      )}
-
-      {/* ancora più robusto: ref sempre presente */}
-      <div ref={bottomRef} />
-    </section>
+    <div className="flex-1 overflow-y-auto bg-black px-4 py-6">
+      <div className="mx-auto max-w-4xl space-y-4">
+        {messages.length === 0 ? (
+          <div className="text-sm text-white/40">Nessun messaggio.</div>
+        ) : (
+          messages.map((m, idx) => {
+            const isUser = m.sender === "user";
+            return (
+              <div key={m.id ?? idx} className={`flex ${isUser ? "justify-end" : "justify-start"}`}>
+                <div
+                  className={`max-w-[780px] rounded-2xl px-4 py-3 text-sm leading-relaxed border ${
+                    isUser
+                      ? "bg-white/10 border-white/15 text-white"
+                      : "bg-neutral-950 border-white/10 text-white/90"
+                  }`}
+                >
+                  <div className="text-[11px] mb-1 text-white/40">
+                    {isUser ? "Tu" : "Anova"}
+                  </div>
+                  <div className="whitespace-pre-wrap">{m.text}</div>
+                </div>
+              </div>
+            );
+          })
+        )}
+        <div ref={bottomRef} />
+      </div>
+    </div>
   );
 }
-// ⬆️ FINE BLOCCO 15.2 — ChatMessages
