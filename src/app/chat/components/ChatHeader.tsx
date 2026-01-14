@@ -1,20 +1,37 @@
 "use client";
+// ======================================================
+// ChatHeader — Top Bar + Cost Panel
+// Path: src/app/chat/components/ChatHeader.tsx
+// ======================================================
 
-import type { Dispatch, SetStateAction } from "react";
+import { useMemo } from "react";
 
 type Props = {
   sessionId: string | null;
-  sessionTitle: string;
-  setSessionTitle: Dispatch<SetStateAction<string>>;
-  editingTitle: boolean;
-  setEditingTitle: Dispatch<SetStateAction<boolean>>;
-  onCommitTitle: () => void;
 
-  onOpenArchive: () => void;
-  onOpenTrash: () => void;
-  onNewSession: () => void;
-  onAddTab: () => void;
+  sessionTitle: string;
+  setSessionTitle: (v: string) => void;
+
+  editingTitle: boolean;
+  setEditingTitle: (v: boolean) => void;
+
+  onCommitTitle: () => void | Promise<void>;
+
+  // ✅ COSTI PROVIDER (ultimo giro + totale)
+  lastCost: number;
+  totalCost: number;
 };
+
+function formatEUR(v: number) {
+  const n = Number.isFinite(v) ? v : 0;
+  // 0.000123 -> "€0.00012" (5 decimali per vedere microcosti)
+  return new Intl.NumberFormat("it-IT", {
+    style: "currency",
+    currency: "EUR",
+    minimumFractionDigits: 2,
+    maximumFractionDigits: n < 0.01 ? 5 : 2,
+  }).format(n);
+}
 
 export default function ChatHeader({
   sessionId,
@@ -23,24 +40,21 @@ export default function ChatHeader({
   editingTitle,
   setEditingTitle,
   onCommitTitle,
-  onOpenArchive,
-  onOpenTrash,
-  onNewSession,
-  onAddTab,
+  lastCost,
+  totalCost,
 }: Props) {
-  const label = sessionTitle?.trim()
-    ? sessionTitle
-    : sessionId
-    ? `Chat #${sessionId.slice(-6)}`
-    : "Chat";
+  const label = useMemo(() => {
+    const fallback = sessionId ? `Chat #${sessionId.slice(-6)}` : "Chat";
+    return sessionTitle?.trim() ? sessionTitle.trim() : fallback;
+  }, [sessionId, sessionTitle]);
 
   return (
-    <header className="sticky top-0 z-30 border-b border-neutral-800 bg-black/80 backdrop-blur">
-      <div className="mx-auto max-w-6xl px-4 py-3 flex items-center justify-between gap-3">
-        {/* Left: brand + title */}
-        <div className="min-w-0 flex items-center gap-3">
-          <div className="shrink-0 text-lg font-semibold">
-            Anova<span className="text-neutral-500"> β</span>
+    <header className="shrink-0 border-b border-white/10 bg-black/50 backdrop-blur">
+      <div className="mx-auto w-full max-w-5xl px-6 h-14 flex items-center justify-between gap-3">
+        {/* LEFT: Brand */}
+        <div className="flex items-center gap-3 min-w-0">
+          <div className="text-[14px] font-semibold text-white/90 whitespace-nowrap">
+            Anova <span className="text-white/40 font-normal">β</span>
           </div>
 
           {/* Title */}
@@ -49,16 +63,16 @@ export default function ChatHeader({
               <input
                 value={sessionTitle}
                 onChange={(e) => setSessionTitle(e.target.value)}
-                onBlur={onCommitTitle}
+                onBlur={() => onCommitTitle()}
                 onKeyDown={(e) => e.key === "Enter" && onCommitTitle()}
-                className="w-[260px] max-w-[50vw] rounded-lg bg-neutral-950 border border-white/10 px-3 py-1.5 text-sm text-white outline-none focus:border-white/25"
                 autoFocus
-                placeholder={sessionId ? `Chat #${sessionId.slice(-6)}` : "Titolo chat"}
+                className="h-9 w-[260px] max-w-[45vw] rounded-xl bg-black/40 border border-white/15 px-3 text-[13px] text-white/90 outline-none focus:border-white/25"
+                placeholder="Titolo chat…"
               />
             ) : (
               <button
                 onClick={() => setEditingTitle(true)}
-                className="max-w-[50vw] truncate rounded-lg border border-white/10 bg-white/0 px-3 py-1.5 text-sm text-white/80 hover:bg-white/5 hover:text-white"
+                className="h-9 max-w-[45vw] px-3 rounded-xl border border-white/10 bg-white/5 hover:bg-white/10 text-[13px] text-white/85 truncate"
                 title="Rinomina chat"
               >
                 {label}
@@ -67,37 +81,21 @@ export default function ChatHeader({
           </div>
         </div>
 
-        {/* Right: actions */}
-        <div className="shrink-0 flex items-center gap-2">
-          <button
-            onClick={onOpenArchive}
-            className="rounded-lg border border-white/10 px-3 py-1.5 text-sm text-white/75 hover:bg-white/5 hover:text-white"
-          >
-            Archivio
-          </button>
+        {/* RIGHT: Cost Panel */}
+        <div className="flex items-center gap-2 shrink-0">
+          <div className="rounded-xl border border-white/10 bg-white/5 px-3 py-1.5">
+            <div className="text-[10px] text-white/45 leading-none">Ultimo</div>
+            <div className="text-[12px] font-medium text-white/85 leading-tight">
+              {formatEUR(lastCost)}
+            </div>
+          </div>
 
-          <button
-            onClick={onOpenTrash}
-            className="rounded-lg border border-white/10 px-3 py-1.5 text-sm text-white/75 hover:bg-white/5 hover:text-white"
-          >
-            Cestino
-          </button>
-
-          <button
-            onClick={onNewSession}
-            className="rounded-lg border border-white/20 px-3 py-1.5 text-sm text-white/85 hover:bg-white/5"
-            title="Nuova chat"
-          >
-            + Chat
-          </button>
-
-          <button
-            onClick={onAddTab}
-            className="rounded-lg border border-white/20 px-3 py-1.5 text-sm text-white/85 hover:bg-white/5"
-            title="Nuova sotto-chat"
-          >
-            + Tab
-          </button>
+          <div className="rounded-xl border border-white/10 bg-white/5 px-3 py-1.5">
+            <div className="text-[10px] text-white/45 leading-none">Totale</div>
+            <div className="text-[12px] font-semibold text-white leading-tight">
+              {formatEUR(totalCost)}
+            </div>
+          </div>
         </div>
       </div>
     </header>

@@ -79,7 +79,11 @@ export default function ChatShell() {
   // MESSAGES
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
-  const bottomRef = useRef<HTMLDivElement | null>(null);
+  const bottomRef = useRef<HTMLDivElement>(null!);
+// COST (provider)
+const [lastCost, setLastCost] = useState(0);
+const [totalCost, setTotalCost] = useState(0);
+
 
   // -------------------------
   // LISTENER sessions (archive/trash)
@@ -374,7 +378,14 @@ export default function ChatShell() {
         body: JSON.stringify({ prompt: trimmed, rules: rulesDraft }),
       });
       const data = await res.json();
-      aiText = data?.finalText ?? "⚠️ Risposta vuota.";
+aiText = data?.finalText ?? "⚠️ Risposta vuota.";
+
+// ✅ QUI (subito dopo aiText)
+const cost = data?.cost ?? null;
+setLastCost(Number(cost?.totalCost ?? 0));
+setTotalCost((prev) => prev + Number(cost?.totalCost ?? 0));
+
+
     } catch {
       aiText = "❌ Errore API.";
     }
@@ -392,8 +403,9 @@ export default function ChatShell() {
     });
   }
 
-  return (
-    <main className="h-screen w-screen flex bg-black text-neutral-100 relative overflow-hidden">
+   return (
+    <main className="h-screen w-screen flex bg-black text-neutral-100 overflow-hidden">
+      {/* Sidebar sinistra (ChatGPT-like) */}
       <ChatSidePanels
         showArchive={showArchive}
         showTrash={showTrash}
@@ -409,76 +421,103 @@ export default function ChatShell() {
         handleOpenSession={openSession}
         handleDeleteSession={deleteSession}
         handleRestoreSession={restoreSession}
+        onNewSession={newSession}
+        onAddTab={addTab}
       />
 
-      <div className="flex-1 flex flex-col">
-        <ChatHeader
-          sessionId={sessionId}
-          sessionTitle={sessionTitle}
-          setSessionTitle={setSessionTitle}
-          editingTitle={editingTitle}
-          setEditingTitle={setEditingTitle}
-          onCommitTitle={commitSessionTitle}
-          onOpenArchive={() => {
-            setShowTrash(false);
-            setShowArchive(true);
-          }}
-          onOpenTrash={() => {
-            setShowArchive(false);
-            setShowTrash(true);
-          }}
-          onNewSession={newSession}
-          onAddTab={addTab}
-        />
+      {/* Colonna principale */}
+      <section className="flex-1 min-w-0 flex flex-col">
+        {/* Header top */}
+        <div className="h-14 shrink-0 border-b border-white/10 bg-neutral-950/60 backdrop-blur flex items-center">
+          <div className="mx-auto w-full max-w-5xl px-6 flex items-center justify-between">
+<ChatHeader
+  sessionId={sessionId}
+  sessionTitle={sessionTitle}
+  setSessionTitle={setSessionTitle}
+  editingTitle={editingTitle}
+  setEditingTitle={setEditingTitle}
+  onCommitTitle={commitSessionTitle}
+  lastCost={lastCost}
+  totalCost={totalCost}
+/>
+
+          </div>
+        </div>
 
         {/* Tabs + Rules */}
-        {/* Tabs + Rules */}
-        <div className="border-b border-neutral-800 bg-neutral-950">
-          <div className="mx-auto max-w-6xl px-4 py-3">
-            <div className="flex items-center gap-2 overflow-x-auto">
+        <div className="shrink-0 border-b border-white/10 bg-neutral-950/60 backdrop-blur">
+          <div className="mx-auto w-full max-w-6xl px-8 py-5">
+
+            {/* Tabs */}
+            <div className="flex items-center gap-2 overflow-x-auto pb-1">
               {visibleTabs.map((t) => (
                 <button
                   key={t.id}
                   onClick={() => setActiveTabId(t.id)}
-                  className={`shrink-0 rounded-lg px-3 py-1.5 text-sm border transition ${
-                    t.id === activeTabId
-                      ? "border-white/25 bg-white/10 text-white"
-                      : "border-white/10 bg-white/0 text-white/70 hover:bg-white/5"
-                  }`}
+className={`shrink-0 rounded-full px-5 py-2.5 text-[15px] font-medium border transition whitespace-nowrap ${
+  t.id === activeTabId
+    ? "border-white/35 bg-white/15 text-white shadow-sm"
+    : "border-white/15 bg-white/0 text-white/85 hover:bg-white/10 hover:border-white/25"
+}`}
+
+                  title={t.title || "Tab"}
                 >
                   {t.title || "Tab"}
-                  <span className="ml-2 text-[11px] text-white/40">{t.provider}</span>
                 </button>
               ))}
 
               <button
                 onClick={addTab}
-                className="shrink-0 rounded-lg px-3 py-1.5 text-sm border border-white/15 bg-white/0 hover:bg-white/5"
-                title="Aggiungi sotto-chat"
+                className="shrink-0 rounded-full px-5 py-2.5 text-[15px] font-medium border border-white/20 bg-white/0 hover:bg-white/10 text-white/85 whitespace-nowrap"
+
+                title="Aggiungi tab"
               >
                 + Tab
               </button>
             </div>
 
-            <div className="mt-3">
-              <div className="text-xs text-white/60 mb-1">Regole (solo per questa tab)</div>
-              <textarea
-                value={rulesDraft}
-                onChange={(e) => onRulesChange(e.target.value)}
-                placeholder="Scrivi regole operative."
-                rows={3}
-                className="w-full rounded-2xl bg-black/40 border border-white/10 px-4 py-3 text-sm outline-none focus:border-white/25"
-              />
-              <div className="mt-2 text-[11px] text-white/35">
-                Regole = vincoli operativi per questa sotto-chat.
-              </div>
-            </div>
+            {/* Rules */}
+        <div className="mt-5">
+  <div className="text-[13px] font-medium text-white/75 mb-2">
+    Regole (solo per questa tab)
+  </div>
+
+  <textarea
+    value={rulesDraft}
+    onChange={(e) => onRulesChange(e.target.value)}
+    placeholder="Scrivi regole operative…"
+    rows={4}
+    className="w-full rounded-2xl bg-black/40 border border-white/15 px-5 py-4 text-[14px] leading-relaxed text-white placeholder-white/35 outline-none focus:border-white/35 focus:bg-black/50"
+  />
+
+  <div className="mt-2 text-[12px] text-white/45">
+    Regole = vincoli operativi per questa sotto-chat.
+  </div>
+</div>
+
           </div>
         </div>
 
-        <ChatMessagesView messages={messages} bottomRef={bottomRef} />
-        <ChatInput input={input} setInput={setInput} onSend={sendMessage} disabled={!userId} />
-      </div>
+        {/* Area messaggi (scroll) */}
+        <div className="flex-1 min-h-0 overflow-y-auto">
+          <div className="mx-auto w-full max-w-5xl px-6">
+            <ChatMessagesView messages={messages} bottomRef={bottomRef} />
+          </div>
+        </div>
+
+        {/* Input (sticky bottom, come ChatGPT) */}
+        <div className="shrink-0 border-t border-white/10 bg-black/60 backdrop-blur">
+          <div className="mx-auto w-full max-w-6xl px-8 py-5">
+
+            <ChatInput
+              input={input}
+              setInput={setInput}
+              onSend={sendMessage}
+              disabled={!userId}
+            />
+          </div>
+        </div>
+      </section>
     </main>
   );
 }

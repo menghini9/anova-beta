@@ -1,39 +1,61 @@
 "use client";
+// ======================================================
+// ChatInput — ChatGPT-like (Bigger + Brighter)
+// Path: src/app/chat/components/ChatInput.tsx
+// ======================================================
 
 import type { FormEvent } from "react";
 
 type Props = {
   input: string;
   setInput: (v: string) => void;
-  onSend: (e: FormEvent) => void | Promise<void>;
+  onSend: (e: FormEvent) => void;
   disabled?: boolean;
 };
 
 export default function ChatInput({ input, setInput, onSend, disabled }: Props) {
+  const canSend = !disabled && input.trim().length > 0;
+
   return (
-    <form onSubmit={onSend} className="border-t border-neutral-800 bg-black/80 backdrop-blur px-4 py-4">
-      <div className="mx-auto max-w-4xl flex gap-3 items-end">
-        <div className="flex-1">
+    <div className="sticky bottom-0 border-t border-white/10 bg-black/75 backdrop-blur">
+      <form onSubmit={onSend} className="mx-auto w-full max-w-6xl px-8 py-5">
+        <div className="flex items-end gap-3 rounded-3xl border border-white/20 bg-black/45 px-4 py-3 shadow-[0_0_0_1px_rgba(255,255,255,0.03)]">
+          {/* Input */}
           <textarea
             value={input}
             onChange={(e) => setInput(e.target.value)}
-            disabled={disabled}
-            rows={2}
             placeholder="Scrivi un messaggio…"
-            className="w-full resize-none rounded-2xl bg-neutral-950 border border-white/10 px-4 py-3 text-sm text-white outline-none focus:border-white/25 disabled:opacity-60"
+            rows={1}
+            disabled={disabled}
+            className="flex-1 resize-none bg-transparent px-2 py-3 text-[15px] leading-relaxed text-white placeholder-white/35 outline-none"
+            style={{
+              scrollbarWidth: "none",
+              msOverflowStyle: "none",
+            }}
           />
-          <div className="mt-2 text-[11px] text-white/30">
-            Invio = Enter • A capo = Shift+Enter
-          </div>
+
+          {/* Send */}
+          <button
+            type="submit"
+            disabled={!canSend}
+            className="h-[52px] px-6 rounded-2xl border border-white/25 bg-white/12 text-[15px] font-semibold text-white hover:bg-white/18 hover:border-white/40 disabled:opacity-40 disabled:hover:bg-white/12 disabled:hover:border-white/25 transition"
+            title={canSend ? "Invia" : "Scrivi qualcosa per inviare"}
+          >
+            Invia
+          </button>
         </div>
 
-        <button
-          disabled={disabled}
-          className="shrink-0 rounded-2xl border border-white/15 px-5 py-3 text-sm text-white/90 hover:bg-white/5 disabled:opacity-60"
-        >
-          Invia
-        </button>
-      </div>
-    </form>
+        <div className="mt-3 text-[12px] text-white/50 px-2">
+          Invio = Enter · A capo = Shift+Enter
+        </div>
+      </form>
+
+      {/* Hide scrollbar (webkit) */}
+      <style jsx>{`
+        textarea::-webkit-scrollbar {
+          display: none;
+        }
+      `}</style>
+    </div>
   );
 }
