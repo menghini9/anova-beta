@@ -1,6 +1,6 @@
 "use client";
 // ======================================================
-// ChatMessages — ChatGPT-like layout
+// ChatMessages — ChatGPT-like layout (User bubble + Assistant free)
 // Path: src/app/chat/components/ChatMessages.tsx
 // ======================================================
 
@@ -15,23 +15,30 @@ export default function ChatMessagesView({
   bottomRef: RefObject<HTMLDivElement>;
 }) {
   return (
-    <section className="flex-1 overflow-y-auto">
-      <div className="mx-auto max-w-3xl px-4 py-6 space-y-4">
+    // Nota: lo scroll è gestito in ChatShell, qui solo layout
+    <section className="w-full">
+      <div className="w-full px-2 py-6 space-y-6">
         {messages.length === 0 ? (
           <div className="text-white/35 text-sm">Nessun messaggio.</div>
         ) : (
           messages.map((m, idx) => {
             const isUser = m.sender === "user";
+
+            // USER: bubble a destra
+            if (isUser) {
+              return (
+                <div key={m.id ?? idx} className="w-full flex justify-end">
+                  <div className="max-w-[72%] rounded-2xl bg-white/10 border border-white/10 px-4 py-3 text-[14px] leading-relaxed text-white whitespace-pre-wrap">
+                    {m.text}
+                  </div>
+                </div>
+              );
+            }
+
+            // ASSISTANT/PROVIDER: testo libero (no riquadro) come ChatGPT
             return (
-              <div key={m.id ?? idx} className={`flex ${isUser ? "justify-end" : "justify-start"}`}>
-                <div
-                  className={[
-                    "max-w-[85%] rounded-2xl px-4 py-3 text-sm leading-relaxed border",
-                    isUser
-                      ? "bg-white/10 border-white/10 text-white"
-                      : "bg-black/30 border-white/10 text-white/90",
-                  ].join(" ")}
-                >
+              <div key={m.id ?? idx} className="w-full">
+                <div className="text-[14px] leading-relaxed text-white/90 whitespace-pre-wrap">
                   {m.text}
                 </div>
               </div>

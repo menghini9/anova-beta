@@ -33,13 +33,14 @@ export async function POST(req: Request) {
       usage,
     });
 
-    // 3) Response
-    return NextResponse.json({
-      finalText: text,
-      cost, // ✅ quello che ti serve lato UI
-      // usage, // opzionale: sbloccalo solo se vuoi debug
-      // model, // opzionale
-    });
+return NextResponse.json({
+  finalText: text,
+  cost,
+  usage: usage ?? { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+  model,
+});
+
+
   } catch (err: any) {
     return NextResponse.json(
       {

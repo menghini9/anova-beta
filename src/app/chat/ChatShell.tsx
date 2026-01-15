@@ -34,6 +34,51 @@ import ChatInput from "./components/ChatInput";
 const hasWindow = () => typeof window !== "undefined";
 const safeGet = (k: string) => (hasWindow() ? window.localStorage.getItem(k) : null);
 const safeSet = (k: string, v: string) => hasWindow() && window.localStorage.setItem(k, v);
+// =========================
+// COST & TOKENS — Persistenza (localStorage)
+// =========================
+const LS_LAST_COST = "anova_last_cost";
+const LS_TOTAL_COST = "anova_total_cost";
+const LS_LAST_TOKENS = "anova_last_tokens";
+const LS_TOTAL_TOKENS = "anova_total_tokens";
+
+type UsageLite = {
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
+};
+
+function safeJsonParse<T>(raw: string | null, fallback: T): T {
+  if (!raw) return fallback;
+  try {
+    return JSON.parse(raw) as T;
+  } catch {
+    return fallback;
+  }
+}
+
+function n(v: any) {
+  const x = Number(v);
+  return Number.isFinite(x) ? x : 0;
+}
+// =========================
+// TOKENS — helpers
+// =========================
+function normUsage(u: any): UsageLite {
+  return {
+    prompt_tokens: n(u?.prompt_tokens),
+    completion_tokens: n(u?.completion_tokens),
+    total_tokens: n(u?.total_tokens),
+  };
+}
+
+function addUsage(a: UsageLite, b: UsageLite): UsageLite {
+  return {
+    prompt_tokens: a.prompt_tokens + b.prompt_tokens,
+    completion_tokens: a.completion_tokens + b.completion_tokens,
+    total_tokens: a.total_tokens + b.total_tokens,
+  };
+}
 
 function newId() {
   return `${Date.now()}_${Math.random().toString(16).slice(2)}`;
@@ -80,10 +125,60 @@ export default function ChatShell() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const bottomRef = useRef<HTMLDivElement>(null!);
-// COST (provider)
-const [lastCost, setLastCost] = useState(0);
-const [totalCost, setTotalCost] = useState(0);
+// =========================
+// COSTI & TOKENS (Provider) — STATE
+// =========================
+const [lastCost, setLastCost] = useState<number>(0);
+const [totalCost, setTotalCost] = useState<number>(0);
 
+const [lastTokens, setLastTokens] = useState<UsageLite>({
+  prompt_tokens: 0,
+  completion_tokens: 0,
+  total_tokens: 0,
+});
+
+const [totalTokens, setTotalTokens] = useState<UsageLite>({
+  prompt_tokens: 0,
+  completion_tokens: 0,
+  total_tokens: 0,
+});
+const [sidebarOpen, setSidebarOpen] = useState(true);
+
+// =========================
+// COSTI & TOKENS — BOOTSTRAP da localStorage (1 volta)
+// =========================
+useEffect(() => {
+  setLastCost(n(safeGet(LS_LAST_COST)));
+  setTotalCost(n(safeGet(LS_TOTAL_COST)));
+
+  setLastTokens(
+    safeJsonParse<UsageLite>(safeGet(LS_LAST_TOKENS), {
+      prompt_tokens: 0,
+      completion_tokens: 0,
+      total_tokens: 0,
+    })
+  );
+
+  setTotalTokens(
+    safeJsonParse<UsageLite>(safeGet(LS_TOTAL_TOKENS), {
+      prompt_tokens: 0,
+      completion_tokens: 0,
+      total_tokens: 0,
+    })
+  );
+}, []);
+// =========================
+// COSTI & TOKENS — PERSISTENZA in localStorage
+// =========================
+useEffect(() => {
+  safeSet(LS_LAST_COST, String(lastCost));
+  safeSet(LS_TOTAL_COST, String(totalCost));
+}, [lastCost, totalCost]);
+
+useEffect(() => {
+  safeSet(LS_LAST_TOKENS, JSON.stringify(lastTokens));
+  safeSet(LS_TOTAL_TOKENS, JSON.stringify(totalTokens));
+}, [lastTokens, totalTokens]);
 
   // -------------------------
   // LISTENER sessions (archive/trash)
@@ -352,6 +447,38 @@ const [totalCost, setTotalCost] = useState(0);
     e.preventDefault();
     const trimmed = input.trim();
     if (!trimmed || !userId || !sessionId || !activeTabId) return;
+// =========================
+// FAST PATH — small talk (no API, costo zero)
+// =========================
+const t = trimmed.toLowerCase();
+const isSmallTalk =
+  t === "ciao" ||
+  t === "ciao!" ||
+  t === "hello" ||
+  t === "hi" ||
+  t === "ok" ||
+  t === "grazie" ||
+  t === "thanks" ||
+  t === "👍";
+
+if (isSmallTalk) {
+  const messagesRef = collection(db, "sessions", sessionId, "tabs", activeTabId, "messages");
+
+  await addDoc(messagesRef, {
+    sender: "anova",
+    text: "👋 Ciao! Dimmi pure cosa ti serve.",
+    createdAt: serverTimestamp(),
+    owner: userId,
+  });
+
+  await updateDoc(doc(db, "sessions", sessionId), {
+    updatedAt: serverTimestamp(),
+    lastMessage: "👋 Ciao! Dimmi pure cosa ti serve.",
+  });
+
+  setInput("");
+  return;
+}
 
     const messagesRef = collection(db, "sessions", sessionId, "tabs", activeTabId, "messages");
 
@@ -380,10 +507,30 @@ const [totalCost, setTotalCost] = useState(0);
       const data = await res.json();
 aiText = data?.finalText ?? "⚠️ Risposta vuota.";
 
-// ✅ QUI (subito dopo aiText)
+// =========================
+// KPI — COSTI & TOKENS (Last + Total)
+// Nota: restano visibili finché non arriva un'altra chiamata
+// =========================
 const cost = data?.cost ?? null;
-setLastCost(Number(cost?.totalCost ?? 0));
-setTotalCost((prev) => prev + Number(cost?.totalCost ?? 0));
+const lastC = n(cost?.totalCost);
+setLastCost(lastC);
+setTotalCost((prev) => prev + lastC);
+
+// Tokens: supporto più forme possibili (in base al tuo API payload)
+const usageRaw =
+  data?.usage ??
+  data?.tokens ??
+  data?.usageLite ??
+  data?.cost?.usage ??          // <-- spesso finisce qui
+  data?.meta?.usage ??          // <-- o qui
+  data?.providerUsage ??        // <-- altra variante comune
+  null;
+
+const lastU = normUsage(usageRaw);
+
+setLastTokens(lastU);
+setTotalTokens((prev) => addUsage(prev, lastU));
+
 
 
     } catch {
@@ -423,7 +570,18 @@ setTotalCost((prev) => prev + Number(cost?.totalCost ?? 0));
         handleRestoreSession={restoreSession}
         onNewSession={newSession}
         onAddTab={addTab}
+        sidebarOpen={sidebarOpen}
+        setSidebarOpen={setSidebarOpen}
       />
+{!sidebarOpen && (
+  <button
+    onClick={() => setSidebarOpen(true)}
+    className="fixed left-3 top-3 z-50 rounded-xl border border-white/15 bg-black/60 backdrop-blur px-3 py-2 text-[12px] text-white/85 hover:bg-white/10"
+    title="Apri sidebar"
+  >
+    ☰
+  </button>
+)}
 
       {/* Colonna principale */}
       <section className="flex-1 min-w-0 flex flex-col">
@@ -439,7 +597,10 @@ setTotalCost((prev) => prev + Number(cost?.totalCost ?? 0));
   onCommitTitle={commitSessionTitle}
   lastCost={lastCost}
   totalCost={totalCost}
+  lastTokens={lastTokens}
+  totalTokens={totalTokens}
 />
+
 
           </div>
         </div>
@@ -498,25 +659,29 @@ className={`shrink-0 rounded-full px-5 py-2.5 text-[15px] font-medium border tra
           </div>
         </div>
 
-        {/* Area messaggi (scroll) */}
-        <div className="flex-1 min-h-0 overflow-y-auto">
-          <div className="mx-auto w-full max-w-5xl px-6">
-            <ChatMessagesView messages={messages} bottomRef={bottomRef} />
-          </div>
-        </div>
+{/* Chat viewport (ChatGPT-like): messaggi full + input overlay */}
+<div className="relative flex-1 min-h-0">
+  {/* Scroll messaggi: sotto passa l'input, quindi padding-bottom */}
+  <div className="absolute inset-0 overflow-y-auto">
+    <div className="mx-auto w-full max-w-6xl px-8 pb-44">
 
-        {/* Input (sticky bottom, come ChatGPT) */}
-        <div className="shrink-0 border-t border-white/10 bg-black/60 backdrop-blur">
-          <div className="mx-auto w-full max-w-6xl px-8 py-5">
 
-            <ChatInput
-              input={input}
-              setInput={setInput}
-              onSend={sendMessage}
-              disabled={!userId}
-            />
-          </div>
-        </div>
+      <ChatMessagesView messages={messages} bottomRef={bottomRef} />
+    </div>
+  </div>
+
+<div className="absolute bottom-0 left-0 right-0 z-20 pointer-events-none">
+  <div className="bg-gradient-to-t from-black/85 via-black/60 to-transparent backdrop-blur pointer-events-auto">
+    <ChatInput
+      input={input}
+      setInput={setInput}
+      onSend={sendMessage}
+      disabled={!userId}
+    />
+  </div>
+</div>
+</div>
+
       </section>
     </main>
   );

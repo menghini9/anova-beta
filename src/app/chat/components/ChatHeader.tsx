@@ -1,10 +1,16 @@
 "use client";
 // ======================================================
-// ChatHeader — Top Bar + Cost Panel
+// ChatHeader — Top Bar (Brand + Title + KPI)
 // Path: src/app/chat/components/ChatHeader.tsx
 // ======================================================
 
 import { useMemo } from "react";
+
+type UsageLite = {
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
+};
 
 type Props = {
   sessionId: string | null;
@@ -17,9 +23,11 @@ type Props = {
 
   onCommitTitle: () => void | Promise<void>;
 
-  // ✅ COSTI PROVIDER (ultimo giro + totale)
+  // ✅ COSTI & TOKENS (ultimo giro + totale)
   lastCost: number;
   totalCost: number;
+  lastTokens: UsageLite;
+  totalTokens: UsageLite;
 };
 
 function formatEUR(v: number) {
@@ -33,6 +41,12 @@ function formatEUR(v: number) {
   }).format(n);
 }
 
+function formatInt(v: any) {
+  const x = Number(v);
+  if (!Number.isFinite(x)) return "0";
+  return Math.round(x).toString();
+}
+
 export default function ChatHeader({
   sessionId,
   sessionTitle,
@@ -42,6 +56,8 @@ export default function ChatHeader({
   onCommitTitle,
   lastCost,
   totalCost,
+  lastTokens,
+  totalTokens,
 }: Props) {
   const label = useMemo(() => {
     const fallback = sessionId ? `Chat #${sessionId.slice(-6)}` : "Chat";
@@ -51,8 +67,8 @@ export default function ChatHeader({
   return (
     <header className="shrink-0 border-b border-white/10 bg-black/50 backdrop-blur">
       <div className="mx-auto w-full max-w-5xl px-6 h-14 flex items-center justify-between gap-3">
-        {/* LEFT: Brand */}
-        <div className="flex items-center gap-3 min-w-0">
+        {/* LEFT: Brand + Title (flessibile) */}
+        <div className="flex items-center gap-3 min-w-0 flex-1">
           <div className="text-[14px] font-semibold text-white/90 whitespace-nowrap">
             Anova <span className="text-white/40 font-normal">β</span>
           </div>
@@ -81,20 +97,26 @@ export default function ChatHeader({
           </div>
         </div>
 
-        {/* RIGHT: Cost Panel */}
-        <div className="flex items-center gap-2 shrink-0">
-          <div className="rounded-xl border border-white/10 bg-white/5 px-3 py-1.5">
-            <div className="text-[10px] text-white/45 leading-none">Ultimo</div>
-            <div className="text-[12px] font-medium text-white/85 leading-tight">
-              {formatEUR(lastCost)}
-            </div>
+        {/* RIGHT: KPI (Costi + Tokens) */}
+        <div className="shrink-0 flex items-center gap-3">
+          {/* Costi */}
+          <div className="text-[12px] text-white/60 whitespace-nowrap">
+            Ultimo: <span className="text-white/90">{formatEUR(lastCost)}</span>
+          </div>
+          <div className="text-[12px] text-white/60 whitespace-nowrap">
+            Totale: <span className="text-white/90">{formatEUR(totalCost)}</span>
           </div>
 
-          <div className="rounded-xl border border-white/10 bg-white/5 px-3 py-1.5">
-            <div className="text-[10px] text-white/45 leading-none">Totale</div>
-            <div className="text-[12px] font-semibold text-white leading-tight">
-              {formatEUR(totalCost)}
-            </div>
+          <div className="h-4 w-px bg-white/10 mx-1" />
+
+          {/* Tokens */}
+          <div className="text-[12px] text-white/60 whitespace-nowrap">
+            Ultimi token:{" "}
+            <span className="text-white/90">{formatInt(lastTokens?.total_tokens)}</span>
+          </div>
+          <div className="text-[12px] text-white/60 whitespace-nowrap">
+            Totale token:{" "}
+            <span className="text-white/90">{formatInt(totalTokens?.total_tokens)}</span>
           </div>
         </div>
       </div>
