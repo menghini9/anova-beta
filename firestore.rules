@@ -1,0 +1,87 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // =========================
+    // HELPERS
+    // =========================
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isOwnerFieldValid() {
+      // obbligo owner coerente con uid quando lo scrivi
+      return request.resource.data.owner == request.auth.uid;
+    }
+
+    function sessionOwner(sessionId) {
+      return get(/databases/$(database)/documents/sessions/$(sessionId)).data.owner;
+    }
+
+    function isSessionOwner(sessionId) {
+      return signedIn() && sessionOwner(sessionId) == request.auth.uid;
+    }
+
+    // =========================
+    // SESSIONS (top-level)
+    // collection: sessions/{sessionId}
+    // fields: owner, deleted, updatedAt, createdAt, lastMessage, title
+    // =========================
+    match /sessions/{sessionId} {
+
+      allow read: if signedIn() && resource.data.owner == request.auth.uid;
+
+      // create: owner deve essere uid
+      allow create: if signedIn() && isOwnerFieldValid();
+
+      // update/delete: solo owner
+      allow update, delete: if signedIn() && resource.data.owner == request.auth.uid;
+
+      // -------------------------
+      // SUBCOLLECTION: tabs
+      // sessions/{sessionId}/tabs/{tabId}
+      // -------------------------
+      match /tabs/{tabId} {
+        allow read: if isSessionOwner(sessionId);
+
+        // create: owner deve combaciare e parent deve essere tuo
+        allow create: if isSessionOwner(sessionId) && isOwnerFieldValid();
+
+        // update/delete: solo owner della session
+        allow update, delete: if isSessionOwner(sessionId);
+        
+        // -------------------------
+        // SUBCOLLECTION: messages
+        // sessions/{sessionId}/tabs/{tabId}/messages/{messageId}
+        // -------------------------
+        match /messages/{messageId} {
+          allow read: if isSessionOwner(sessionId);
+
+          // create: owner deve combaciare e parent deve essere tuo
+          allow create: if isSessionOwner(sessionId) && isOwnerFieldValid();
+
+          // update/delete: (di solito non servono, ma le lasciamo per dev)
+          allow update, delete: if isSessionOwner(sessionId);
+        }
+      }
+    }
+
+    // =========================
+    // PROJECTS (se li usi)
+    // collection: projects/{projectId}
+    // campo: owner
+    // =========================
+    match /projects/{projectId} {
+      allow read: if signedIn() && resource.data.owner == request.auth.uid;
+      allow create: if signedIn() && isOwnerFieldValid();
+      allow update, delete: if signedIn() && resource.data.owner == request.auth.uid;
+    }
+
+    // =========================
+    // FALLBACK: blocca tutto il resto
+    // =========================
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
