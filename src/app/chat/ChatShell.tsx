@@ -1,6 +1,6 @@
 "use client";
 // ======================================================
-// ChatShell — NEW CORE (Base)
+// ChatShell — NEW CORE (CLEAN + Tabs Provider Labels + Close Tab)
 // Path: src/app/chat/ChatShell.tsx
 // ======================================================
 
@@ -29,11 +29,13 @@ import ChatSidePanels from "./components/ChatSidePanels";
 import ChatMessagesView from "./components/ChatMessages";
 import ChatInput from "./components/ChatInput";
 
-
-
+// =========================
+// localStorage helpers
+// =========================
 const hasWindow = () => typeof window !== "undefined";
 const safeGet = (k: string) => (hasWindow() ? window.localStorage.getItem(k) : null);
 const safeSet = (k: string, v: string) => hasWindow() && window.localStorage.setItem(k, v);
+
 // =========================
 // COST & TOKENS — Persistenza (localStorage)
 // =========================
@@ -61,6 +63,7 @@ function n(v: any) {
   const x = Number(v);
   return Number.isFinite(x) ? x : 0;
 }
+
 // =========================
 // TOKENS — helpers
 // =========================
@@ -85,13 +88,17 @@ function newId() {
 }
 
 export default function ChatShell() {
+  // =========================
   // USER
+  // =========================
   const [userId, setUserId] = useState<string | null>(null);
   useEffect(() => {
     getUserId().then(setUserId);
   }, []);
 
+  // =========================
   // ARCHIVIO/Cestino
+  // =========================
   const [sessions, setSessions] = useState<SessionMetaLite[]>([]);
   const [trashSessions, setTrashSessions] = useState<SessionMetaLite[]>([]);
   const [showArchive, setShowArchive] = useState(false);
@@ -100,85 +107,99 @@ export default function ChatShell() {
   const [inlineEditId, setInlineEditId] = useState<string | null>(null);
   const [inlineEditValue, setInlineEditValue] = useState("");
 
+  // =========================
   // SESSION
+  // =========================
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [sessionTitle, setSessionTitle] = useState("");
   const [editingTitle, setEditingTitle] = useState(false);
 
+  // =========================
   // TABS
+  // =========================
   const [tabs, setTabs] = useState<TabDoc[]>([]);
   const [activeTabId, setActiveTabId] = useState<string | null>(null);
+
+  const visibleTabs = useMemo(() => tabs.filter((t) => !t.deleted), [tabs]);
 
   const activeTab = useMemo(
     () => tabs.find((t) => t.id === activeTabId) ?? null,
     [tabs, activeTabId]
   );
 
-  const visibleTabs = useMemo(() => tabs.filter((t) => !t.deleted), [tabs]);
-
+  // =========================
   // RULES
+  // =========================
   const [rulesDraft, setRulesDraft] = useState("");
   const rulesDebounceRef = useRef<any>(null);
   useEffect(() => setRulesDraft(activeTab?.rules ?? ""), [activeTabId, activeTab?.rules]);
 
+  // =========================
   // MESSAGES
+  // =========================
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const bottomRef = useRef<HTMLDivElement>(null!);
-// =========================
-// COSTI & TOKENS (Provider) — STATE
-// =========================
-const [lastCost, setLastCost] = useState<number>(0);
-const [totalCost, setTotalCost] = useState<number>(0);
 
-const [lastTokens, setLastTokens] = useState<UsageLite>({
-  prompt_tokens: 0,
-  completion_tokens: 0,
-  total_tokens: 0,
-});
+  // =========================
+  // COSTI & TOKENS (Provider) — STATE
+  // =========================
+  const [lastCost, setLastCost] = useState<number>(0);
+  const [totalCost, setTotalCost] = useState<number>(0);
 
-const [totalTokens, setTotalTokens] = useState<UsageLite>({
-  prompt_tokens: 0,
-  completion_tokens: 0,
-  total_tokens: 0,
-});
-const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [lastTokens, setLastTokens] = useState<UsageLite>({
+    prompt_tokens: 0,
+    completion_tokens: 0,
+    total_tokens: 0,
+  });
 
-// =========================
-// COSTI & TOKENS — BOOTSTRAP da localStorage (1 volta)
-// =========================
-useEffect(() => {
-  setLastCost(n(safeGet(LS_LAST_COST)));
-  setTotalCost(n(safeGet(LS_TOTAL_COST)));
+  const [totalTokens, setTotalTokens] = useState<UsageLite>({
+    prompt_tokens: 0,
+    completion_tokens: 0,
+    total_tokens: 0,
+  });
 
-  setLastTokens(
-    safeJsonParse<UsageLite>(safeGet(LS_LAST_TOKENS), {
-      prompt_tokens: 0,
-      completion_tokens: 0,
-      total_tokens: 0,
-    })
-  );
+  // =========================
+  // SIDEBAR
+  // =========================
+  const [sidebarOpen, setSidebarOpen] = useState(true);
 
-  setTotalTokens(
-    safeJsonParse<UsageLite>(safeGet(LS_TOTAL_TOKENS), {
-      prompt_tokens: 0,
-      completion_tokens: 0,
-      total_tokens: 0,
-    })
-  );
-}, []);
-// =========================
-// COSTI & TOKENS — PERSISTENZA in localStorage
-// =========================
-useEffect(() => {
-  safeSet(LS_LAST_COST, String(lastCost));
-  safeSet(LS_TOTAL_COST, String(totalCost));
-}, [lastCost, totalCost]);
+  // =========================
+  // COSTI & TOKENS — BOOTSTRAP da localStorage (1 volta)
+  // =========================
+  useEffect(() => {
+    setLastCost(n(safeGet(LS_LAST_COST)));
+    setTotalCost(n(safeGet(LS_TOTAL_COST)));
 
-useEffect(() => {
-  safeSet(LS_LAST_TOKENS, JSON.stringify(lastTokens));
-  safeSet(LS_TOTAL_TOKENS, JSON.stringify(totalTokens));
-}, [lastTokens, totalTokens]);
+    setLastTokens(
+      safeJsonParse<UsageLite>(safeGet(LS_LAST_TOKENS), {
+        prompt_tokens: 0,
+        completion_tokens: 0,
+        total_tokens: 0,
+      })
+    );
+
+    setTotalTokens(
+      safeJsonParse<UsageLite>(safeGet(LS_TOTAL_TOKENS), {
+        prompt_tokens: 0,
+        completion_tokens: 0,
+        total_tokens: 0,
+      })
+    );
+  }, []);
+
+  // =========================
+  // COSTI & TOKENS — PERSISTENZA in localStorage
+  // =========================
+  useEffect(() => {
+    safeSet(LS_LAST_COST, String(lastCost));
+    safeSet(LS_TOTAL_COST, String(totalCost));
+  }, [lastCost, totalCost]);
+
+  useEffect(() => {
+    safeSet(LS_LAST_TOKENS, JSON.stringify(lastTokens));
+    safeSet(LS_TOTAL_TOKENS, JSON.stringify(totalTokens));
+  }, [lastTokens, totalTokens]);
 
   // -------------------------
   // LISTENER sessions (archive/trash)
@@ -293,6 +314,7 @@ useEffect(() => {
 
       const alive = rows.filter((t: any) => !t?.deleted);
 
+      // bootstrap main tab se vuoto
       if (rows.length === 0 && !didBootstrapMainTabRef.current) {
         didBootstrapMainTabRef.current = true;
 
@@ -314,8 +336,10 @@ useEffect(() => {
         return;
       }
 
+      // set active se manca
       if (!activeTabId && alive.length > 0) setActiveTabId(alive[0].id);
 
+      // se active sparisce, riassegna
       const aliveIds = new Set(alive.map((t) => t.id));
       if (activeTabId && !aliveIds.has(activeTabId) && alive.length > 0) {
         setActiveTabId(alive[0].id);
@@ -336,7 +360,9 @@ useEffect(() => {
     const qy = query(messagesRef, orderBy("createdAt", "desc"), limit(80));
 
     const unsub = onSnapshot(qy, (snap) => {
-      const rows: ChatMessage[] = snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) })).reverse();
+      const rows: ChatMessage[] = snap.docs
+        .map((d) => ({ id: d.id, ...(d.data() as any) }))
+        .reverse();
       setMessages(rows);
     });
 
@@ -346,9 +372,9 @@ useEffect(() => {
   // autoscroll
   useEffect(() => bottomRef.current?.scrollIntoView({ behavior: "smooth" }), [messages]);
 
-  // -------------------------
+  // =========================
   // ACTIONS
-  // -------------------------
+  // =========================
   async function newSession() {
     if (!userId) return;
     const sid = newId();
@@ -417,8 +443,9 @@ useEffect(() => {
   async function addTab() {
     if (!sessionId || !userId) return;
     const id = newId();
+
     await setDoc(doc(db, "sessions", sessionId, "tabs", id), {
-      title: `Tab ${visibleTabs.length + 1}`,
+      title: null,
       provider: "openai",
       rules: "",
       deleted: false,
@@ -426,7 +453,27 @@ useEffect(() => {
       updatedAt: serverTimestamp(),
       owner: userId,
     });
+
     setActiveTabId(id);
+  }
+
+  async function closeTab(tabId: string) {
+    if (!sessionId) return;
+
+    // non chiudere l'ultima tab viva
+    const alive = visibleTabs;
+    if (alive.length <= 1) return;
+
+    await updateDoc(doc(db, "sessions", sessionId, "tabs", tabId), {
+      deleted: true,
+      updatedAt: serverTimestamp(),
+    });
+
+    // se chiudi quella attiva, passa ad una rimasta
+    if (activeTabId === tabId) {
+      const next = alive.find((t) => t.id !== tabId);
+      if (next) setActiveTabId(next.id);
+    }
   }
 
   async function persistTabRules(next: string) {
@@ -447,41 +494,41 @@ useEffect(() => {
     e.preventDefault();
     const trimmed = input.trim();
     if (!trimmed || !userId || !sessionId || !activeTabId) return;
-// =========================
-// FAST PATH — small talk (no API, costo zero)
-// =========================
-const t = trimmed.toLowerCase();
-const isSmallTalk =
-  t === "ciao" ||
-  t === "ciao!" ||
-  t === "hello" ||
-  t === "hi" ||
-  t === "ok" ||
-  t === "grazie" ||
-  t === "thanks" ||
-  t === "👍";
 
-if (isSmallTalk) {
-  const messagesRef = collection(db, "sessions", sessionId, "tabs", activeTabId, "messages");
-
-  await addDoc(messagesRef, {
-    sender: "anova",
-    text: "👋 Ciao! Dimmi pure cosa ti serve.",
-    createdAt: serverTimestamp(),
-    owner: userId,
-  });
-
-  await updateDoc(doc(db, "sessions", sessionId), {
-    updatedAt: serverTimestamp(),
-    lastMessage: "👋 Ciao! Dimmi pure cosa ti serve.",
-  });
-
-  setInput("");
-  return;
-}
+    // =========================
+    // FAST PATH — small talk (no API, costo zero)
+    // =========================
+    const t = trimmed.toLowerCase();
+    const isSmallTalk =
+      t === "ciao" ||
+      t === "ciao!" ||
+      t === "hello" ||
+      t === "hi" ||
+      t === "ok" ||
+      t === "grazie" ||
+      t === "thanks" ||
+      t === "👍";
 
     const messagesRef = collection(db, "sessions", sessionId, "tabs", activeTabId, "messages");
 
+    if (isSmallTalk) {
+      await addDoc(messagesRef, {
+        sender: "anova",
+        text: "👋 Ciao! Dimmi pure cosa ti serve.",
+        createdAt: serverTimestamp(),
+        owner: userId,
+      });
+
+      await updateDoc(doc(db, "sessions", sessionId), {
+        updatedAt: serverTimestamp(),
+        lastMessage: "👋 Ciao! Dimmi pure cosa ti serve.",
+      });
+
+      setInput("");
+      return;
+    }
+
+    // user msg
     await addDoc(messagesRef, {
       sender: "user",
       text: trimmed,
@@ -502,37 +549,37 @@ if (isSmallTalk) {
       const res = await fetch("/api/chat-reply", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ prompt: trimmed, rules: rulesDraft }),
+        body: JSON.stringify({
+          prompt: trimmed,
+          rules: rulesDraft,
+          tabId: activeTabId,
+          sessionId,
+        }),
       });
+
       const data = await res.json();
-aiText = data?.finalText ?? "⚠️ Risposta vuota.";
+      aiText = data?.finalText ?? "⚠️ Risposta vuota.";
 
-// =========================
-// KPI — COSTI & TOKENS (Last + Total)
-// Nota: restano visibili finché non arriva un'altra chiamata
-// =========================
-const cost = data?.cost ?? null;
-const lastC = n(cost?.totalCost);
-setLastCost(lastC);
-setTotalCost((prev) => prev + lastC);
+      // =========================
+      // KPI — COSTI & TOKENS (Last + Total)
+      // =========================
+      const cost = data?.cost ?? null;
+      const lastC = n(cost?.totalCost);
+      setLastCost(lastC);
+      setTotalCost((prev) => prev + lastC);
 
-// Tokens: supporto più forme possibili (in base al tuo API payload)
-const usageRaw =
-  data?.usage ??
-  data?.tokens ??
-  data?.usageLite ??
-  data?.cost?.usage ??          // <-- spesso finisce qui
-  data?.meta?.usage ??          // <-- o qui
-  data?.providerUsage ??        // <-- altra variante comune
-  null;
+      const usageRaw =
+        data?.usage ??
+        data?.tokens ??
+        data?.usageLite ??
+        data?.cost?.usage ??
+        data?.meta?.usage ??
+        data?.providerUsage ??
+        null;
 
-const lastU = normUsage(usageRaw);
-
-setLastTokens(lastU);
-setTotalTokens((prev) => addUsage(prev, lastU));
-
-
-
+      const lastU = normUsage(usageRaw);
+      setLastTokens(lastU);
+      setTotalTokens((prev) => addUsage(prev, lastU));
     } catch {
       aiText = "❌ Errore API.";
     }
@@ -550,9 +597,31 @@ setTotalTokens((prev) => addUsage(prev, lastU));
     });
   }
 
-   return (
+  // =========================
+  // TAB LABEL — Provider + Numero per provider (OpenAI 1, Gemini 2, ...)
+  // =========================
+  const providerLabel = (p?: string | null) => {
+    const k = String(p ?? "openai").toLowerCase();
+    if (k === "openai") return "OpenAI";
+    if (k === "gemini") return "Gemini";
+    if (k === "anthropic" || k === "claude") return "Claude";
+    return k.toUpperCase();
+  };
+
+  const providerCounters: Record<string, number> = {};
+  const tabIndexById: Record<string, number> = {};
+  visibleTabs.forEach((t) => {
+    const key = String(t.provider ?? "openai").toLowerCase();
+    providerCounters[key] = (providerCounters[key] ?? 0) + 1;
+    tabIndexById[t.id] = providerCounters[key];
+  });
+
+  // =========================
+  // RENDER
+  // =========================
+  return (
     <main className="h-screen w-screen flex bg-black text-neutral-100 overflow-hidden">
-      {/* Sidebar sinistra (ChatGPT-like) */}
+      {/* Sidebar sinistra */}
       <ChatSidePanels
         showArchive={showArchive}
         showTrash={showTrash}
@@ -573,64 +642,74 @@ setTotalTokens((prev) => addUsage(prev, lastU));
         sidebarOpen={sidebarOpen}
         setSidebarOpen={setSidebarOpen}
       />
-{!sidebarOpen && (
-  <button
-    onClick={() => setSidebarOpen(true)}
-    className="fixed left-3 top-3 z-50 rounded-xl border border-white/15 bg-black/60 backdrop-blur px-3 py-2 text-[12px] text-white/85 hover:bg-white/10"
-    title="Apri sidebar"
-  >
-    ☰
-  </button>
-)}
+
+      {/* Bottone apri sidebar quando è chiusa */}
+      {!sidebarOpen && (
+        <button
+          onClick={() => setSidebarOpen(true)}
+          className="fixed left-3 top-3 z-50 rounded-xl border border-white/15 bg-black/60 backdrop-blur px-3 py-2 text-[12px] text-white/85 hover:bg-white/10"
+          title="Apri sidebar"
+        >
+          ☰
+        </button>
+      )}
 
       {/* Colonna principale */}
       <section className="flex-1 min-w-0 flex flex-col">
-        {/* Header top */}
+        {/* Header */}
         <div className="h-14 shrink-0 border-b border-white/10 bg-neutral-950/60 backdrop-blur flex items-center">
           <div className="mx-auto w-full max-w-5xl px-6 flex items-center justify-between">
-<ChatHeader
-  sessionId={sessionId}
-  sessionTitle={sessionTitle}
-  setSessionTitle={setSessionTitle}
-  editingTitle={editingTitle}
-  setEditingTitle={setEditingTitle}
-  onCommitTitle={commitSessionTitle}
-  lastCost={lastCost}
-  totalCost={totalCost}
-  lastTokens={lastTokens}
-  totalTokens={totalTokens}
-/>
-
-
+            <ChatHeader
+              sessionId={sessionId}
+              sessionTitle={sessionTitle}
+              setSessionTitle={setSessionTitle}
+              editingTitle={editingTitle}
+              setEditingTitle={setEditingTitle}
+              onCommitTitle={commitSessionTitle}
+              lastCost={lastCost}
+              totalCost={totalCost}
+              lastTokens={lastTokens}
+              totalTokens={totalTokens}
+            />
           </div>
         </div>
 
         {/* Tabs + Rules */}
         <div className="shrink-0 border-b border-white/10 bg-neutral-950/60 backdrop-blur">
           <div className="mx-auto w-full max-w-6xl px-8 py-5">
-
             {/* Tabs */}
             <div className="flex items-center gap-2 overflow-x-auto pb-1">
               {visibleTabs.map((t) => (
-                <button
-                  key={t.id}
-                  onClick={() => setActiveTabId(t.id)}
-className={`shrink-0 rounded-full px-5 py-2.5 text-[15px] font-medium border transition whitespace-nowrap ${
-  t.id === activeTabId
-    ? "border-white/35 bg-white/15 text-white shadow-sm"
-    : "border-white/15 bg-white/0 text-white/85 hover:bg-white/10 hover:border-white/25"
-}`}
+                <div key={t.id} className="relative shrink-0">
+                  <button
+                    onClick={() => setActiveTabId(t.id)}
+                    className={`rounded-full pl-5 pr-10 py-2.5 text-[15px] font-medium border transition whitespace-nowrap ${
+                      t.id === activeTabId
+                        ? "border-white/35 bg-white/15 text-white shadow-sm"
+                        : "border-white/15 bg-white/0 text-white/85 hover:bg-white/10 hover:border-white/25"
+                    }`}
+                    title={t.title || "Tab"}
+                  >
+                    {`${providerLabel(t.provider)} ${tabIndexById[t.id] ?? 1}`}
+                  </button>
 
-                  title={t.title || "Tab"}
-                >
-                  {t.title || "Tab"}
-                </button>
+                  {/* Close tab */}
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      closeTab(t.id);
+                    }}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 h-7 w-7 rounded-full border border-white/10 bg-black/30 text-white/70 hover:bg-white/10 hover:text-white transition"
+                    title="Chiudi tab"
+                  >
+                    ×
+                  </button>
+                </div>
               ))}
 
               <button
                 onClick={addTab}
                 className="shrink-0 rounded-full px-5 py-2.5 text-[15px] font-medium border border-white/20 bg-white/0 hover:bg-white/10 text-white/85 whitespace-nowrap"
-
                 title="Aggiungi tab"
               >
                 + Tab
@@ -638,50 +717,47 @@ className={`shrink-0 rounded-full px-5 py-2.5 text-[15px] font-medium border tra
             </div>
 
             {/* Rules */}
-        <div className="mt-5">
-  <div className="text-[13px] font-medium text-white/75 mb-2">
-    Regole (solo per questa tab)
-  </div>
+            <div className="mt-5">
+              <div className="text-[13px] font-medium text-white/75 mb-2">
+                Regole (solo per questa tab)
+              </div>
 
-  <textarea
-    value={rulesDraft}
-    onChange={(e) => onRulesChange(e.target.value)}
-    placeholder="Scrivi regole operative…"
-    rows={4}
-    className="w-full rounded-2xl bg-black/40 border border-white/15 px-5 py-4 text-[14px] leading-relaxed text-white placeholder-white/35 outline-none focus:border-white/35 focus:bg-black/50"
-  />
+              <textarea
+                value={rulesDraft}
+                onChange={(e) => onRulesChange(e.target.value)}
+                placeholder="Scrivi regole operative…"
+                rows={4}
+                className="w-full rounded-2xl bg-black/40 border border-white/15 px-5 py-4 text-[14px] leading-relaxed text-white placeholder-white/35 outline-none focus:border-white/35 focus:bg-black/50"
+              />
 
-  <div className="mt-2 text-[12px] text-white/45">
-    Regole = vincoli operativi per questa sotto-chat.
-  </div>
-</div>
-
+              <div className="mt-2 text-[12px] text-white/45">
+                Regole = vincoli operativi per questa sotto-chat.
+              </div>
+            </div>
           </div>
         </div>
 
-{/* Chat viewport (ChatGPT-like): messaggi full + input overlay */}
-<div className="relative flex-1 min-h-0">
-  {/* Scroll messaggi: sotto passa l'input, quindi padding-bottom */}
-  <div className="absolute inset-0 overflow-y-auto">
-    <div className="mx-auto w-full max-w-6xl px-8 pb-44">
+        {/* Chat viewport */}
+        <div className="relative flex-1 min-h-0">
+          <div className="absolute inset-0 overflow-y-auto">
+            <div className="mx-auto w-full max-w-6xl px-8 pb-44">
+              <ChatMessagesView messages={messages} bottomRef={bottomRef} />
+            </div>
+          </div>
 
-
-      <ChatMessagesView messages={messages} bottomRef={bottomRef} />
-    </div>
-  </div>
-
-<div className="absolute bottom-0 left-0 right-0 z-20 pointer-events-none">
-  <div className="bg-gradient-to-t from-black/85 via-black/60 to-transparent backdrop-blur pointer-events-auto">
-    <ChatInput
-      input={input}
-      setInput={setInput}
-      onSend={sendMessage}
-      disabled={!userId}
-    />
-  </div>
-</div>
-</div>
-
+          {/* Input overlay */}
+          <div className="absolute bottom-0 left-0 right-0 z-20 pointer-events-none">
+            <div className="bg-gradient-to-t from-black/85 via-black/60 to-transparent backdrop-blur pointer-events-auto">
+              <ChatInput
+                input={input}
+                setInput={setInput}
+                onSend={sendMessage}
+                disabled={!userId}
+                focusKey={activeTabId} // 👈 forza focus quando cambi tab
+              />
+            </div>
+          </div>
+        </div>
       </section>
     </main>
   );
