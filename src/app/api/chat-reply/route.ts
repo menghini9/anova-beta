@@ -1,51 +1,362 @@
 // ======================================================
-// API — chat-reply
+// API — chat-reply (KPI Contract Stable + MEMORY V2)
 // Path: src/app/api/chat-reply/route.ts
 // ======================================================
 
 import { NextResponse } from "next/server";
 
 import { openAIReply } from "@/lib/ai/openai";
+import { geminiReply } from "@/lib/ai/gemini";
+import { claudeReply } from "@/lib/ai/claude";
+
 import { computeProviderCost } from "@/lib/utils/cost";
 
+// =========================
+// MEMORY V2
+// =========================
+import type { MemoryState, MemoryPacketV2 } from "@/lib/memory/types";
+import { MEMORY_POLICY } from "@/lib/memory/policy";
+import { approxTokensFromText } from "@/lib/memory/estimate";
+import { compressToMemoryPacketV2 } from "@/lib/memory/compress";
+
 export const dynamic = "force-dynamic";
+
+// =========================
+// TIPI (stabili per UI)
+// =========================
+type UsageLite = {
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
+};
+
+type CostLite = {
+  totalCost: number;
+  currency: "EUR";
+};
+
+// =========================
+// HELPERS — numeri sicuri
+// =========================
+function n(v: any): number {
+  const x = Number(v);
+  return Number.isFinite(x) ? x : 0;
+}
+
+// =========================
+// NORMALIZER — usage
+// Supporta vari formati (OpenAI/Gemini/Claude/altro)
+// =========================
+function normalizeUsage(raw: any): UsageLite {
+  const pt =
+    raw?.prompt_tokens ??
+    raw?.input_tokens ??
+    raw?.promptTokenCount ??
+    raw?.promptTokens ??
+    0;
+
+  const ct =
+    raw?.completion_tokens ??
+    raw?.output_tokens ??
+    raw?.candidatesTokenCount ??
+    raw?.completionTokens ??
+    0;
+
+  const tt =
+    raw?.total_tokens ??
+    raw?.totalTokenCount ??
+    raw?.totalTokens ??
+    n(pt) + n(ct);
+
+  return {
+    prompt_tokens: n(pt),
+    completion_tokens: n(ct),
+    total_tokens: n(tt),
+  };
+}
+
+// =========================
+// NORMALIZER — cost
+// =========================
+function normalizeCost(raw: any): CostLite {
+  const total = raw?.totalCost ?? raw?.total_cost ?? raw?.eur ?? 0;
+
+  return {
+    totalCost: n(total),
+    currency: "EUR",
+  };
+}
+
+// =========================
+// PROVIDER PICKER — robusto
+// body.provider: "openai" | "gemini" | "claude"
+// fallback: openai
+// =========================
+function pickProvider(v: any): "openai" | "gemini" | "claude" {
+  const s = String(v ?? "").toLowerCase().trim();
+  if (s === "gemini") return "gemini";
+  if (s === "claude" || s === "anthropic") return "claude";
+  return "openai";
+}
+
+// =========================
+// MEMORY — default state
+// =========================
+function emptyMemoryState(): MemoryState {
+  return {
+    pendingCompression: false,
+    compressedMemory: null,
+    memoryVersion: 0,
+    approxContextTokens: 0,
+  };
+}
+
+// =========================
+// MEMORY — build prompt
+// Regola: dopo compressione NON reinviamo history lunga.
+// Il client deve inviare solo ultimi 1-2 turni in historyText.
+// =========================
+function buildAssembledPrompt(args: {
+  memoryPacket: MemoryPacketV2 | null;
+  historyText: string;
+  userPrompt: string;
+}): string {
+  const { memoryPacket, historyText, userPrompt } = args;
+
+  const memoryHeader = memoryPacket
+    ? `MEMORY_PACKET (V2) — JSON:\n${JSON.stringify(memoryPacket)}\n\n`
+    : "";
+
+  return (
+    `${memoryHeader}` +
+    (historyText ? `LAST_TURNS:\n${historyText}\n\n` : "") +
+    `USER_MESSAGE:\n${userPrompt}\n`
+  );
+}
+
+// =========================
+// MEMORY — token estimate (cheap)
+// =========================
+function estimateContextTokens(args: {
+  memoryPacket: MemoryPacketV2 | null;
+  historyText: string;
+  rules: string;
+  userPrompt: string;
+}): number {
+  const memoryHeader = args.memoryPacket
+    ? `MEMORY_PACKET (V2) — JSON:\n${JSON.stringify(args.memoryPacket)}\n\n`
+    : "";
+
+  return (
+    approxTokensFromText(memoryHeader) +
+    approxTokensFromText(args.historyText) +
+    approxTokensFromText(args.rules) +
+    approxTokensFromText(args.userPrompt)
+  );
+}
 
 export async function POST(req: Request) {
   try {
     const body = await req.json().catch(() => ({}));
-    const prompt = String(body?.prompt ?? "").trim();
-    const rules = String(body?.rules ?? "").trim();
 
-    if (!prompt) {
+    const userPrompt = String(body?.prompt ?? "").trim();
+    const rules = String(body?.rules ?? "").trim();
+    const provider = pickProvider(body?.provider);
+
+    // MEMORY inputs (retrocompatibili)
+    const tabId = String(body?.tabId ?? "tab_default").trim();
+    const historyText = String(body?.historyText ?? "").trim();
+    const incomingMemoryState: MemoryState =
+      (body?.memoryState as MemoryState) ?? emptyMemoryState();
+
+    const memoryPacket = (incomingMemoryState?.compressedMemory ??
+      null) as MemoryPacketV2 | null;
+
+    if (!userPrompt) {
       return NextResponse.json(
-        { finalText: "⚠️ Prompt vuoto.", cost: null },
+        {
+          finalText: "⚠️ Prompt vuoto.",
+          provider,
+          model: null,
+          usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+          cost: { totalCost: 0, currency: "EUR" },
+
+          // extra safe
+          tabId,
+          memoryState: incomingMemoryState,
+          memoryMeta: {
+            approxContextTokens: incomingMemoryState?.approxContextTokens ?? 0,
+            pendingCompression: Boolean(incomingMemoryState?.pendingCompression),
+            memoryVersion: Number(incomingMemoryState?.memoryVersion ?? 0),
+            warn: { yellow: false, red: false },
+          },
+        },
         { status: 400 }
       );
     }
 
-    // 1) Provider reply
-    const { text, usage, model } = await openAIReply({ prompt, rules });
-
-    // 2) Provider cost (€/token) — server-side
-    const cost = computeProviderCost({
-      provider: "openai",
-      model,
-      usage,
+    // ======================================================
+    // A) MEMORY — triggers + compression
+    // ======================================================
+    const approxContextTokens = estimateContextTokens({
+      memoryPacket,
+      historyText,
+      rules,
+      userPrompt,
     });
 
-return NextResponse.json({
-  finalText: text,
-  cost,
-  usage: usage ?? { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+    const nextState: MemoryState = {
+      pendingCompression: Boolean(incomingMemoryState?.pendingCompression),
+      compressedMemory: memoryPacket ?? null,
+      memoryVersion: Number(incomingMemoryState?.memoryVersion ?? 0),
+      approxContextTokens,
+    };
+
+    // Soft trigger: arma compressione
+    if (approxContextTokens >= MEMORY_POLICY.LIMIT_TOKENS_SOFT) {
+      nextState.pendingCompression = true;
+    }
+
+    // Hard trigger: comprimi subito
+    const mustCompressNow =
+      approxContextTokens >= MEMORY_POLICY.LIMIT_TOKENS_HARD;
+
+    // Just-in-time: se pendingCompression true, comprimi prima di rispondere
+    const shouldCompress =
+      mustCompressNow || Boolean(nextState.pendingCompression);
+
+    if (shouldCompress) {
+      const nextVersion = (nextState.memoryVersion ?? 0) + 1;
+
+      const callProvider = async (p: string) => {
+        if (provider === "gemini") {
+          const r = await geminiReply({ prompt: p, rules: "OUTPUT JSON ONLY." });
+          return { text: r.text };
+        }
+        if (provider === "claude") {
+          const r = await claudeReply({ prompt: p, rules: "OUTPUT JSON ONLY." });
+          return { text: r.text };
+        }
+        const r = await openAIReply({ prompt: p, rules: "OUTPUT JSON ONLY." });
+        return { text: r.text };
+      };
+
+      const newPacket = await compressToMemoryPacketV2(
+        {
+          existingMemory: nextState.compressedMemory,
+          historyText,
+          userMessage: userPrompt,
+          nextVersion,
+        },
+        callProvider
+      );
+
+      nextState.compressedMemory = newPacket;
+      nextState.memoryVersion = nextVersion;
+      nextState.pendingCompression = false;
+    }
+
+    // ======================================================
+    // B) Provider reply — usa assembledPrompt
+    // ======================================================
+    const assembledPrompt = buildAssembledPrompt({
+      memoryPacket: nextState.compressedMemory,
+      historyText,
+      userPrompt,
+    });
+
+    let text = "";
+    let usage: any = null;
+    let model: string | null = null;
+
+    if (provider === "gemini") {
+      const r = await geminiReply({ prompt: assembledPrompt, rules });
+      text = r.text;
+      usage = r.usage;
+      model = r.model;
+    } else if (provider === "claude") {
+      const r = await claudeReply({ prompt: assembledPrompt, rules });
+      text = r.text;
+      usage = r.usage;
+      model = r.model;
+    } else {
+      const r = await openAIReply({ prompt: assembledPrompt, rules });
+      text = r.text;
+      usage = r.usage;
+      model = r.model;
+    }
+
+// ======================================================
+// C) Usage norm (contratto stabile)
+// ======================================================
+const usageNorm = normalizeUsage(usage);
+
+// ======================================================
+// D) Cost — calcolo coerente (provider-agnostic)
+// computeProviderCost legge input/output/total
+// ======================================================
+const usageForCost = {
+  input_tokens: usageNorm.prompt_tokens,
+  output_tokens: usageNorm.completion_tokens,
+  total_tokens: usageNorm.total_tokens,
+};
+
+const costRaw = computeProviderCost({
+  provider,
   model,
+  usage: usageForCost,
 });
 
+// ======================================================
+// E) Cost norm (contratto stabile)
+// ======================================================
+const costNorm = normalizeCost(costRaw);
 
+    return NextResponse.json({
+      // =========================
+      // KPI CONTRACT (immutabile)
+      // =========================
+      finalText: text,
+      provider,
+      model: model ?? null,
+      usage: usageNorm,
+      cost: costNorm,
+
+      // =========================
+      // MEMORY V2 (extra UI-safe)
+      // =========================
+      tabId,
+      memoryState: nextState,
+      memoryMeta: {
+        approxContextTokens: nextState.approxContextTokens,
+        pendingCompression: nextState.pendingCompression,
+        memoryVersion: nextState.memoryVersion,
+        warn: {
+          yellow:
+            nextState.approxContextTokens >=
+            MEMORY_POLICY.LIMIT_TOKENS_SOFT * MEMORY_POLICY.WARN_YELLOW_RATIO,
+          red:
+            nextState.approxContextTokens >=
+            MEMORY_POLICY.LIMIT_TOKENS_SOFT * MEMORY_POLICY.WARN_RED_RATIO,
+        },
+      },
+    });
   } catch (err: any) {
     return NextResponse.json(
       {
         finalText: "❌ Errore API.",
-        cost: null,
+        provider: "openai",
+        model: null,
+        usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+        cost: { totalCost: 0, currency: "EUR" },
+        tabId: "tab_default",
+        memoryState: emptyMemoryState(),
+        memoryMeta: {
+          approxContextTokens: 0,
+          pendingCompression: false,
+          memoryVersion: 0,
+          warn: { yellow: false, red: false },
+        },
         error: String(err?.message ?? err),
       },
       { status: 500 }

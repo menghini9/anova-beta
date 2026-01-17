@@ -20,6 +20,8 @@ type Props = {
 
   editingTitle: boolean;
   setEditingTitle: (v: boolean) => void;
+  activeProvider: "openai" | "gemini" | "claude";
+  setActiveProvider: (p: "openai" | "gemini" | "claude") => void;
 
   onCommitTitle: () => void | Promise<void>;
 
@@ -58,7 +60,10 @@ export default function ChatHeader({
   totalCost,
   lastTokens,
   totalTokens,
+  activeProvider,
+  setActiveProvider,
 }: Props) {
+
   const label = useMemo(() => {
     const fallback = sessionId ? `Chat #${sessionId.slice(-6)}` : "Chat";
     return sessionTitle?.trim() ? sessionTitle.trim() : fallback;
@@ -99,6 +104,20 @@ export default function ChatHeader({
 
         {/* RIGHT: KPI (Costi + Tokens) */}
         <div className="shrink-0 flex items-center gap-3">
+                    {/* Provider selector */}
+          <select
+            value={activeProvider}
+            onChange={(e) => setActiveProvider(e.target.value as any)}
+            className="h-9 rounded-xl border border-white/15 bg-black/40 px-3 text-[12px] text-white/85 outline-none focus:border-white/25"
+            title="Provider tab"
+          >
+            <option value="openai">OpenAI</option>
+            <option value="gemini">Gemini</option>
+            <option value="claude">Claude</option>
+          </select>
+
+          <div className="h-4 w-px bg-white/10 mx-1" />
+
           {/* Costi */}
           <div className="text-[12px] text-white/60 whitespace-nowrap">
             Ultimo: <span className="text-white/90">{formatEUR(lastCost)}</span>

@@ -1,6 +1,9 @@
 // Path: src/lib/chat/types.ts
 
-export type ProviderId = "openai";
+export type ProviderId = "openai" | "gemini" | "claude";
+
+
+
 
 export type SessionMetaLite = {
   id: string;

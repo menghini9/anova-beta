@@ -43,6 +43,11 @@ const LS_LAST_COST = "anova_last_cost";
 const LS_TOTAL_COST = "anova_total_cost";
 const LS_LAST_TOKENS = "anova_last_tokens";
 const LS_TOTAL_TOKENS = "anova_total_tokens";
+// =========================
+// MEMORY V2 — Persistenza (localStorage)
+// =========================
+// Chiave per session + tab (così non si mescola tra tab)
+const LS_MEMORY_PREFIX = "anova_memory_v2_";
 
 type UsageLite = {
   prompt_tokens: number;
@@ -62,6 +67,45 @@ function safeJsonParse<T>(raw: string | null, fallback: T): T {
 function n(v: any) {
   const x = Number(v);
   return Number.isFinite(x) ? x : 0;
+}
+// =========================
+// MEMORY V2 — Types (client-side)
+// (shape minimale, uguale al server)
+// =========================
+type MemoryStateLite = {
+  pendingCompression: boolean;
+  compressedMemory: any | null; // il packet JSON
+  memoryVersion: number;
+  approxContextTokens: number;
+};
+
+function emptyMemoryState(): MemoryStateLite {
+  return {
+    pendingCompression: false,
+    compressedMemory: null,
+    memoryVersion: 0,
+    approxContextTokens: 0,
+  };
+}
+
+function memoryKey(sessionId: string, tabId: string) {
+  return `${LS_MEMORY_PREFIX}${sessionId}_${tabId}`;
+}
+
+function loadMemoryState(sessionId: string, tabId: string): MemoryStateLite {
+  return safeJsonParse<MemoryStateLite>(
+    safeGet(memoryKey(sessionId, tabId)),
+    emptyMemoryState()
+  );
+}
+
+function saveMemoryState(sessionId: string, tabId: string, v: MemoryStateLite) {
+  safeSet(memoryKey(sessionId, tabId), JSON.stringify(v));
+}
+
+function clearMemoryState(sessionId: string, tabId: string) {
+  if (!hasWindow()) return;
+  window.localStorage.removeItem(memoryKey(sessionId, tabId));
 }
 
 // =========================
@@ -375,6 +419,16 @@ export default function ChatShell() {
   // =========================
   // ACTIONS
   // =========================
+async function setTabProvider(next: "openai" | "gemini" | "claude") {
+  if (!sessionId || !activeTabId) return;
+
+  await updateDoc(doc(db, "sessions", sessionId, "tabs", activeTabId), {
+    provider: next,
+    updatedAt: serverTimestamp(),
+  });
+}
+
+
   async function newSession() {
     if (!userId) return;
     const sid = newId();
@@ -468,6 +522,8 @@ export default function ChatShell() {
       deleted: true,
       updatedAt: serverTimestamp(),
     });
+    // MEMORY V2 — pulizia localStorage (evita spazzatura)
+    if (sessionId) clearMemoryState(sessionId, tabId);
 
     // se chiudi quella attiva, passa ad una rimasta
     if (activeTabId === tabId) {
@@ -511,7 +567,7 @@ export default function ChatShell() {
 
     const messagesRef = collection(db, "sessions", sessionId, "tabs", activeTabId, "messages");
 
-    if (isSmallTalk) {
+       if (isSmallTalk) {
       await addDoc(messagesRef, {
         sender: "anova",
         text: "👋 Ciao! Dimmi pure cosa ti serve.",
@@ -528,6 +584,7 @@ export default function ChatShell() {
       return;
     }
 
+
     // user msg
     await addDoc(messagesRef, {
       sender: "user",
@@ -542,6 +599,19 @@ export default function ChatShell() {
     });
 
     setInput("");
+    // =========================
+    // MEMORY V2 — historyText (ultimi 2 turni)
+    // Nota: messages è lo stato attuale prima della risposta AI
+    // =========================
+    const lastTurns = messages.slice(-2);
+    const historyText = lastTurns
+      .map((m: any) => `${String(m?.sender ?? "").toUpperCase()}: ${String(m?.text ?? "")}`)
+      .join("\n");
+
+    // =========================
+    // MEMORY V2 — load state (per session+tab)
+    // =========================
+    const memState = loadMemoryState(sessionId, activeTabId);
 
     // call API
     let aiText = "…";
@@ -549,16 +619,30 @@ export default function ChatShell() {
       const res = await fetch("/api/chat-reply", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          prompt: trimmed,
-          rules: rulesDraft,
-          tabId: activeTabId,
-          sessionId,
-        }),
+body: JSON.stringify({
+  prompt: trimmed,
+  rules: rulesDraft,
+  provider: activeTab?.provider ?? "openai",
+  tabId: activeTabId,
+  sessionId,
+
+  // ===== MEMORY V2 =====
+  historyText,
+  memoryState: memState,
+}),
+
+
+
       });
 
       const data = await res.json();
       aiText = data?.finalText ?? "⚠️ Risposta vuota.";
+      // =========================
+      // MEMORY V2 — save state
+      // =========================
+      if (data?.memoryState && sessionId && activeTabId) {
+        saveMemoryState(sessionId, activeTabId, data.memoryState as MemoryStateLite);
+      }
 
       // =========================
       // KPI — COSTI & TOKENS (Last + Total)
@@ -659,18 +743,21 @@ export default function ChatShell() {
         {/* Header */}
         <div className="h-14 shrink-0 border-b border-white/10 bg-neutral-950/60 backdrop-blur flex items-center">
           <div className="mx-auto w-full max-w-5xl px-6 flex items-center justify-between">
-            <ChatHeader
-              sessionId={sessionId}
-              sessionTitle={sessionTitle}
-              setSessionTitle={setSessionTitle}
-              editingTitle={editingTitle}
-              setEditingTitle={setEditingTitle}
-              onCommitTitle={commitSessionTitle}
-              lastCost={lastCost}
-              totalCost={totalCost}
-              lastTokens={lastTokens}
-              totalTokens={totalTokens}
-            />
+<ChatHeader
+  sessionId={sessionId}
+  sessionTitle={sessionTitle}
+  setSessionTitle={setSessionTitle}
+  editingTitle={editingTitle}
+  setEditingTitle={setEditingTitle}
+  onCommitTitle={commitSessionTitle}
+  lastCost={lastCost}
+  totalCost={totalCost}
+  lastTokens={lastTokens}
+  totalTokens={totalTokens}
+  activeProvider={activeTab?.provider ?? "openai"}   // ✅
+  setActiveProvider={setTabProvider}                  // ✅
+/>
+
           </div>
         </div>
 
@@ -721,6 +808,27 @@ export default function ChatShell() {
               <div className="text-[13px] font-medium text-white/75 mb-2">
                 Regole (solo per questa tab)
               </div>
+<div className="flex items-center gap-3 mb-3">
+  <div className="text-[13px] font-medium text-white/75">
+    Provider tab
+  </div>
+
+  <select
+    value={(activeTab?.provider ?? "openai") as any}
+    onChange={(e) => setTabProvider(e.target.value as any)}
+    disabled={!activeTabId}
+    className="h-9 rounded-xl border border-white/15 bg-black/40 px-3 text-[13px] text-white/85 outline-none focus:border-white/25 disabled:opacity-50"
+    title="Seleziona provider per questa tab"
+  >
+    <option value="openai">OpenAI</option>
+    <option value="gemini">Gemini</option>
+    <option value="claude">Claude</option>
+  </select>
+
+  <div className="text-[12px] text-white/45">
+    Cambia modello per questa tab
+  </div>
+</div>
 
               <textarea
                 value={rulesDraft}
