@@ -375,6 +375,16 @@ export default function ChatShell() {
   // =========================
   // ACTIONS
   // =========================
+async function setTabProvider(next: "openai" | "gemini" | "claude") {
+  if (!sessionId || !activeTabId) return;
+
+  await updateDoc(doc(db, "sessions", sessionId, "tabs", activeTabId), {
+    provider: next,
+    updatedAt: serverTimestamp(),
+  });
+}
+
+
   async function newSession() {
     if (!userId) return;
     const sid = newId();
@@ -549,12 +559,15 @@ export default function ChatShell() {
       const res = await fetch("/api/chat-reply", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          prompt: trimmed,
-          rules: rulesDraft,
-          tabId: activeTabId,
-          sessionId,
-        }),
+body: JSON.stringify({
+  prompt: trimmed,
+  rules: rulesDraft,
+  provider: activeTab?.provider ?? "openai", // ✅
+  tabId: activeTabId,
+  sessionId,
+}),
+
+
       });
 
       const data = await res.json();
@@ -659,18 +672,21 @@ export default function ChatShell() {
         {/* Header */}
         <div className="h-14 shrink-0 border-b border-white/10 bg-neutral-950/60 backdrop-blur flex items-center">
           <div className="mx-auto w-full max-w-5xl px-6 flex items-center justify-between">
-            <ChatHeader
-              sessionId={sessionId}
-              sessionTitle={sessionTitle}
-              setSessionTitle={setSessionTitle}
-              editingTitle={editingTitle}
-              setEditingTitle={setEditingTitle}
-              onCommitTitle={commitSessionTitle}
-              lastCost={lastCost}
-              totalCost={totalCost}
-              lastTokens={lastTokens}
-              totalTokens={totalTokens}
-            />
+<ChatHeader
+  sessionId={sessionId}
+  sessionTitle={sessionTitle}
+  setSessionTitle={setSessionTitle}
+  editingTitle={editingTitle}
+  setEditingTitle={setEditingTitle}
+  onCommitTitle={commitSessionTitle}
+  lastCost={lastCost}
+  totalCost={totalCost}
+  lastTokens={lastTokens}
+  totalTokens={totalTokens}
+  activeProvider={activeTab?.provider ?? "openai"}   // ✅
+  setActiveProvider={setTabProvider}                  // ✅
+/>
+
           </div>
         </div>
 
@@ -721,6 +737,27 @@ export default function ChatShell() {
               <div className="text-[13px] font-medium text-white/75 mb-2">
                 Regole (solo per questa tab)
               </div>
+<div className="flex items-center gap-3 mb-3">
+  <div className="text-[13px] font-medium text-white/75">
+    Provider tab
+  </div>
+
+  <select
+    value={(activeTab?.provider ?? "openai") as any}
+    onChange={(e) => setTabProvider(e.target.value as any)}
+    disabled={!activeTabId}
+    className="h-9 rounded-xl border border-white/15 bg-black/40 px-3 text-[13px] text-white/85 outline-none focus:border-white/25 disabled:opacity-50"
+    title="Seleziona provider per questa tab"
+  >
+    <option value="openai">OpenAI</option>
+    <option value="gemini">Gemini</option>
+    <option value="claude">Claude</option>
+  </select>
+
+  <div className="text-[12px] text-white/45">
+    Cambia modello per questa tab
+  </div>
+</div>
 
               <textarea
                 value={rulesDraft}
