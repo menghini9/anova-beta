@@ -104,6 +104,7 @@ function pickProvider(v: any): "openai" | "gemini" | "claude" {
 // =========================
 function emptyMemoryState(): MemoryState {
   return {
+    rawBuffer: "",
     pendingCompression: false,
     compressedMemory: null,
     memoryVersion: 0,
@@ -111,49 +112,76 @@ function emptyMemoryState(): MemoryState {
   };
 }
 
+
+
 // =========================
 // MEMORY — build prompt
 // Regola: dopo compressione NON reinviamo history lunga.
 // Il client deve inviare solo ultimi 1-2 turni in historyText.
 // =========================
+// ======================================================
+// MEMORY — build prompt (RAW + PACKET aware)
+// Regola:
+// - se c'è compressedMemory → usa SOLO quello
+// - se NON c'è → usa rawBuffer come contesto lungo
+// - historyText = ultimi 1–2 turni (micro-delta)
+// ======================================================
 function buildAssembledPrompt(args: {
   memoryPacket: MemoryPacketV2 | null;
+  rawBuffer: string;
   historyText: string;
   userPrompt: string;
 }): string {
-  const { memoryPacket, historyText, userPrompt } = args;
+  const { memoryPacket, rawBuffer, historyText, userPrompt } = args;
 
+  // 1) Se esiste memoria compressa → SOLO packet
   const memoryHeader = memoryPacket
-    ? `MEMORY_PACKET (V2) — JSON:\n${JSON.stringify(memoryPacket)}\n\n`
+    ? `MEMORY_PACKET:\n${JSON.stringify(memoryPacket)}\n\n`
     : "";
 
+  // 2) Se NON esiste packet → usa rawBuffer (contesto completo)
+  const rawHeader =
+    !memoryPacket && rawBuffer
+      ? `CONTEXT_LOG:\n${rawBuffer}\n\n`
+      : "";
+
+  // 3) Ultimi turni SEMPRE (micro-delta)
   return (
-    `${memoryHeader}` +
+    memoryHeader +
+    rawHeader +
     (historyText ? `LAST_TURNS:\n${historyText}\n\n` : "") +
     `USER_MESSAGE:\n${userPrompt}\n`
   );
 }
 
-// =========================
-// MEMORY — token estimate (cheap)
-// =========================
+// ======================================================
+// MEMORY — token estimate (cheap, coerente col prompt)
+// ======================================================
 function estimateContextTokens(args: {
   memoryPacket: MemoryPacketV2 | null;
+  rawBuffer: string;
   historyText: string;
   rules: string;
   userPrompt: string;
 }): number {
   const memoryHeader = args.memoryPacket
-    ? `MEMORY_PACKET (V2) — JSON:\n${JSON.stringify(args.memoryPacket)}\n\n`
+    ? `MEMORY_PACKET:\n${JSON.stringify(args.memoryPacket)}\n\n`
     : "";
+
+  const rawHeader =
+    !args.memoryPacket && args.rawBuffer
+      ? `CONTEXT_LOG:\n${args.rawBuffer}\n\n`
+      : "";
 
   return (
     approxTokensFromText(memoryHeader) +
+    approxTokensFromText(rawHeader) +
     approxTokensFromText(args.historyText) +
     approxTokensFromText(args.rules) +
     approxTokensFromText(args.userPrompt)
   );
 }
+
 
 export async function POST(req: Request) {
   try {
@@ -198,19 +226,25 @@ export async function POST(req: Request) {
     // ======================================================
     // A) MEMORY — triggers + compression
     // ======================================================
-    const approxContextTokens = estimateContextTokens({
-      memoryPacket,
-      historyText,
-      rules,
-      userPrompt,
-    });
+const approxContextTokens = estimateContextTokens({
+  memoryPacket,
+  rawBuffer: String(incomingMemoryState?.rawBuffer ?? ""),
+  historyText,
+  rules,
+  userPrompt,
+});
 
-    const nextState: MemoryState = {
-      pendingCompression: Boolean(incomingMemoryState?.pendingCompression),
-      compressedMemory: memoryPacket ?? null,
-      memoryVersion: Number(incomingMemoryState?.memoryVersion ?? 0),
-      approxContextTokens,
-    };
+
+const nextState: MemoryState = {
+  pendingCompression: Boolean(incomingMemoryState?.pendingCompression),
+  compressedMemory: memoryPacket ?? null,
+  memoryVersion: Number(incomingMemoryState?.memoryVersion ?? 0),
+  approxContextTokens,
+
+  // ✅ rawBuffer resta lato client, ma lo portiamo avanti nello state
+  rawBuffer: String(incomingMemoryState?.rawBuffer ?? ""),
+};
+
 
     // Soft trigger: arma compressione
     if (approxContextTokens >= MEMORY_POLICY.LIMIT_TOKENS_SOFT) {
@@ -225,45 +259,53 @@ export async function POST(req: Request) {
     const shouldCompress =
       mustCompressNow || Boolean(nextState.pendingCompression);
 
-    if (shouldCompress) {
-      const nextVersion = (nextState.memoryVersion ?? 0) + 1;
+if (shouldCompress) {
+  const nextVersion = (nextState.memoryVersion ?? 0) + 1;
 
-      const callProvider = async (p: string) => {
-        if (provider === "gemini") {
-          const r = await geminiReply({ prompt: p, rules: "OUTPUT JSON ONLY." });
-          return { text: r.text };
-        }
-        if (provider === "claude") {
-          const r = await claudeReply({ prompt: p, rules: "OUTPUT JSON ONLY." });
-          return { text: r.text };
-        }
-        const r = await openAIReply({ prompt: p, rules: "OUTPUT JSON ONLY." });
-        return { text: r.text };
-      };
-
-      const newPacket = await compressToMemoryPacketV2(
-        {
-          existingMemory: nextState.compressedMemory,
-          historyText,
-          userMessage: userPrompt,
-          nextVersion,
-        },
-        callProvider
-      );
-
-      nextState.compressedMemory = newPacket;
-      nextState.memoryVersion = nextVersion;
-      nextState.pendingCompression = false;
+  const callProvider = async (p: string) => {
+    if (provider === "gemini") {
+      const r = await geminiReply({ prompt: p, rules: "OUTPUT JSON ONLY." });
+      return { text: r.text };
     }
+    if (provider === "claude") {
+      const r = await claudeReply({ prompt: p, rules: "OUTPUT JSON ONLY." });
+      return { text: r.text };
+    }
+    const r = await openAIReply({ prompt: p, rules: "OUTPUT JSON ONLY." });
+    return { text: r.text };
+  };
+
+  // ✅ FAIL-OPEN: se la compressione fallisce, NON bloccare la risposta
+  try {
+    const newPacket = await compressToMemoryPacketV2(
+      {
+        existingMemory: nextState.compressedMemory,
+        historyText,
+        userMessage: userPrompt,
+        nextVersion,
+      },
+      callProvider
+    );
+
+    nextState.compressedMemory = newPacket;
+    nextState.memoryVersion = nextVersion;
+    nextState.pendingCompression = false;
+  } catch (e) {
+    // Rimanda la compressione a un giro successivo, ma rispondi comunque
+    nextState.pendingCompression = true;
+  }
+}
+
 
     // ======================================================
     // B) Provider reply — usa assembledPrompt
     // ======================================================
-    const assembledPrompt = buildAssembledPrompt({
-      memoryPacket: nextState.compressedMemory,
-      historyText,
-      userPrompt,
-    });
+const assembledPrompt = buildAssembledPrompt({
+  memoryPacket: nextState.compressedMemory,
+  rawBuffer: String(incomingMemoryState?.rawBuffer ?? ""), // ✅ prende la history lunga dal client
+  historyText,
+  userPrompt,
+});
 
     let text = "";
     let usage: any = null;

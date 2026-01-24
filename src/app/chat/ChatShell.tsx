@@ -77,6 +77,7 @@ type MemoryStateLite = {
   compressedMemory: any | null; // il packet JSON
   memoryVersion: number;
   approxContextTokens: number;
+  rawBuffer: string;
 };
 
 function emptyMemoryState(): MemoryStateLite {
@@ -85,8 +86,10 @@ function emptyMemoryState(): MemoryStateLite {
     compressedMemory: null,
     memoryVersion: 0,
     approxContextTokens: 0,
+    rawBuffer: "", // ✅
   };
 }
+
 
 function memoryKey(sessionId: string, tabId: string) {
   return `${LS_MEMORY_PREFIX}${sessionId}_${tabId}`;
@@ -599,19 +602,28 @@ async function setTabProvider(next: "openai" | "gemini" | "claude") {
     });
 
     setInput("");
-    // =========================
-    // MEMORY V2 — historyText (ultimi 2 turni)
-    // Nota: messages è lo stato attuale prima della risposta AI
-    // =========================
-    const lastTurns = messages.slice(-2);
-    const historyText = lastTurns
-      .map((m: any) => `${String(m?.sender ?? "").toUpperCase()}: ${String(m?.text ?? "")}`)
-      .join("\n");
+// =========================
+// MEMORY V2 — LAST_TURNS (ultimi 2 turni)
+// serve solo per "continuità" stile chat, NON è memoria lunga
+// =========================
+const lastTurns = messages.slice(-2);
+const historyText = lastTurns
+  .map((m: any) => {
+    const s = String(m?.sender ?? "").toLowerCase();
+    const role = s === "user" ? "USER" : "ASSISTANT";
+    return `${role}: ${String(m?.text ?? "")}`;
+  })
+  .join("\n");
 
-    // =========================
-    // MEMORY V2 — load state (per session+tab)
-    // =========================
-    const memState = loadMemoryState(sessionId, activeTabId);
+// =========================
+// MEMORY V2 — load state (per session+tab)
+// =========================
+const memState = loadMemoryState(sessionId, activeTabId);
+
+// ✅ se è armata la compressione, inviamo TUTTO il buffer da comprimere
+const compressText = memState?.pendingCompression ? (memState.rawBuffer ?? "") : "";
+
+
 
     // call API
     let aiText = "…";
@@ -626,10 +638,16 @@ body: JSON.stringify({
   tabId: activeTabId,
   sessionId,
 
-  // ===== MEMORY V2 =====
+  // ✅ ultimi 2 turni
   historyText,
+
+  // ✅ stato memoria completo (contiene rawBuffer + packet)
   memoryState: memState,
+
+  // ✅ SOLO se pendingCompression=true (altrimenti stringa vuota)
+  compressText,
 }),
+
 
 
 
@@ -637,12 +655,21 @@ body: JSON.stringify({
 
       const data = await res.json();
       aiText = data?.finalText ?? "⚠️ Risposta vuota.";
-      // =========================
-      // MEMORY V2 — save state
-      // =========================
-      if (data?.memoryState && sessionId && activeTabId) {
-        saveMemoryState(sessionId, activeTabId, data.memoryState as MemoryStateLite);
-      }
+      
+// =========================
+// MEMORY V2 — update local state (rawBuffer cresce sempre)
+// =========================
+if (data?.memoryState && sessionId && activeTabId) {
+  const next = data.memoryState as MemoryStateLite;
+
+  // Appendiamo SEMPRE l’ultimo scambio dentro rawBuffer
+  // (così la history completa si accumula e poi si comprime quando conviene)
+  const turnBlock = `USER: ${trimmed}\nASSISTANT: ${aiText}\n\n`;
+  next.rawBuffer = String((next as any).rawBuffer ?? "") + turnBlock;
+
+  saveMemoryState(sessionId, activeTabId, next);
+}
+
 
       // =========================
       // KPI — COSTI & TOKENS (Last + Total)
