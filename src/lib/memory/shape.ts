@@ -40,13 +40,15 @@ export function ensureMemoryPacketV2(
 
     open_threads: clampArr(raw?.open_threads, 5).map((x: any) => ({
       t: String(x?.t ?? "").slice(0, 180),
-      owner: x?.owner === "user" ? "user" : "anova",
+      owner: x?.owner === "user" ? "user" : "assistant",
+
       status: x?.status === "blocked" ? "blocked" : "open",
     })),
 
     todo_next: clampArr(raw?.todo_next, 5).map((x: any) => ({
       a: String(x?.a ?? "").slice(0, 180),
-      owner: x?.owner === "user" ? "user" : "anova",
+      owner: x?.owner === "user" ? "user" : "assistant",
+
     })),
 
     do_not_forget: clampArr(raw?.do_not_forget, 5).map((x: any) =>
