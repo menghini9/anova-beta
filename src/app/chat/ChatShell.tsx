@@ -572,7 +572,7 @@ async function setTabProvider(next: "openai" | "gemini" | "claude") {
 
        if (isSmallTalk) {
       await addDoc(messagesRef, {
-        sender: "anova",
+        sender: "assistant",
         text: "👋 Ciao! Dimmi pure cosa ti serve.",
         createdAt: serverTimestamp(),
         owner: userId,
@@ -653,22 +653,86 @@ body: JSON.stringify({
 
       });
 
-      const data = await res.json();
-      aiText = data?.finalText ?? "⚠️ Risposta vuota.";
+const data = await res.json().catch(() => ({}));
+
+if (!res.ok) {
+  console.error("chat-reply HTTP", res.status, data);
+  aiText = data?.error
+    ? `❌ ${String(data.error)}`
+    : `❌ Errore API (${res.status})`;
+  throw new Error(aiText);
+}
+
+aiText = data?.finalText ?? "⚠️ Risposta vuota.";
+
       
+// =========================
+// MEMORY V2 — sanitize assistant text (no "Sono Anova", no meta)
+// =========================
+function sanitizeAssistantForMemory(t: string) {
+  const s = String(t ?? "");
+
+  return s
+    // presentazioni / identità
+    .replace(/sono\s+anova[^.\n]*[.\n]/gi, "")
+    .replace(/anov[aà]\s*β/gi, "")
+    .replace(/tuo\s+assistente[^.\n]*[.\n]/gi, "")
+    // meta: "ho memorizzato", "compressore", ecc.
+    .replace(/ho\s+memorizzat[oa][^.\n]*[.\n]/gi, "")
+    .replace(/compress(or|ione)[^.\n]*[.\n]/gi, "")
+    .trim();
+}
+
 // =========================
 // MEMORY V2 — update local state (rawBuffer cresce sempre)
 // =========================
 if (data?.memoryState && sessionId && activeTabId) {
   const next = data.memoryState as MemoryStateLite;
 
-  // Appendiamo SEMPRE l’ultimo scambio dentro rawBuffer
-  // (così la history completa si accumula e poi si comprime quando conviene)
-  const turnBlock = `USER: ${trimmed}\nASSISTANT: ${aiText}\n\n`;
+  const safeAi = sanitizeAssistantForMemory(aiText);
+  const cleanAiText = String(aiText ?? "")
+  .replace(/Sono\s+Anova[^.\n]*/gi, "")
+  .replace(/Anova\s*β/gi, "")
+  .trim();
+
+// =========================
+// MEMORY V2 — update local state (rawBuffer cresce sempre)
+// Regola: se la risposta contiene "Anova", NON la persistiamo in rawBuffer
+// (così non auto-alimentiamo l’identità finta)
+// =========================
+if (data?.memoryState && sessionId && activeTabId) {
+  const next = data.memoryState as MemoryStateLite;
+
+  const cleanedAiText = String(aiText ?? "")
+    .replace(/Sono\s+Anova[^.\n]*[.\n]?/gi, "")   // taglia frasi tipo "Sono Anova..."
+    .replace(/\bAnova\b/gi, "");                 // rimuove il nome se compare
+
+  const turnBlock = `USER: ${trimmed}\nASSISTANT: ${cleanedAiText}\n\n`;
   next.rawBuffer = String((next as any).rawBuffer ?? "") + turnBlock;
+
+  // Se esiste compressedMemory, il rawBuffer NON serve più: lo azzeriamo (evita doppio contesto)
+  if (next.compressedMemory) next.rawBuffer = "";
 
   saveMemoryState(sessionId, activeTabId, next);
 }
+
+
+
+  const cleanedAiText = String(aiText ?? "")
+  .replace(/Sono\s+Anova[^.\n]*[.\n]?/gi, "")
+  .replace(/\bAnova\b/gi, "");
+
+const turnBlock = `USER: ${trimmed}\nASSISTANT: ${cleanedAiText}\n\n`;
+
+next.rawBuffer = String(next.rawBuffer ?? "") + turnBlock;
+
+// Se esiste compressedMemory, il rawBuffer NON serve più
+if ((next as any).compressedMemory) next.rawBuffer = "";
+
+
+  saveMemoryState(sessionId, activeTabId, next);
+}
+
 
 
       // =========================
@@ -696,7 +760,7 @@ if (data?.memoryState && sessionId && activeTabId) {
     }
 
     await addDoc(messagesRef, {
-      sender: "anova",
+      sender: "assistant",
       text: aiText,
       createdAt: serverTimestamp(),
       owner: userId,

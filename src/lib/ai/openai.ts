@@ -31,11 +31,10 @@ export async function openAIReply(args: {
   const apiKey = mustEnv("OPENAI_API_KEY");
 
   // ✅ Scegli il modello che vuoi usare qui (coerente con la tua pricing table in cost.ts)
-  const model = "gpt-5"; // cambia se vuoi: "gpt-4.1", "gpt-4o-mini", ecc.
+  const model = "gpt-4o-mini"; // cambia se vuoi: "gpt-4.1", "gpt-4o-mini", "gpt-5", ecc.
 
-  const system = args.rules?.trim()
-    ? `Regole operative (vincoli):\n${args.rules.trim()}`
-    : "Sei Anova β. Rispondi in modo utile e operativo.";
+const system = args.rules?.trim() ? args.rules.trim() : "";
+
 
   // --------------------------
   // OpenAI Responses API (testo)
@@ -48,10 +47,13 @@ export async function openAIReply(args: {
     },
     body: JSON.stringify({
       model,
-      input: [
-        { role: "system", content: system },
-        { role: "user", content: args.prompt },
-      ],
+input: system
+  ? [
+      { role: "system", content: system },
+      { role: "user", content: args.prompt },
+    ]
+  : [{ role: "user", content: args.prompt }],
+
     }),
   });
 

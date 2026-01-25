@@ -134,25 +134,16 @@ function buildAssembledPrompt(args: {
 }): string {
   const { memoryPacket, rawBuffer, historyText, userPrompt } = args;
 
-  // 1) Se esiste memoria compressa → SOLO packet
-  const memoryHeader = memoryPacket
-    ? `MEMORY_PACKET:\n${JSON.stringify(memoryPacket)}\n\n`
-    : "";
+  // Niente label "MEMORY_PACKET", "CONTEXT_LOG", "SYSTEM", ecc.
+  // Meno “meta”, più stile app ufficiale.
+  const mem = memoryPacket ? `${JSON.stringify(memoryPacket)}\n\n` : "";
+  const raw = !memoryPacket && rawBuffer ? `${rawBuffer}\n\n` : "";
+  const last = historyText ? `${historyText}\n\n` : "";
 
-  // 2) Se NON esiste packet → usa rawBuffer (contesto completo)
-  const rawHeader =
-    !memoryPacket && rawBuffer
-      ? `CONTEXT_LOG:\n${rawBuffer}\n\n`
-      : "";
-
-  // 3) Ultimi turni SEMPRE (micro-delta)
-  return (
-    memoryHeader +
-    rawHeader +
-    (historyText ? `LAST_TURNS:\n${historyText}\n\n` : "") +
-    `USER_MESSAGE:\n${userPrompt}\n`
-  );
+  return mem + raw + last + userPrompt;
 }
+
+
 
 // ======================================================
 // MEMORY — token estimate (cheap, coerente col prompt)
@@ -262,6 +253,8 @@ const nextState: MemoryState = {
 if (shouldCompress) {
   const nextVersion = (nextState.memoryVersion ?? 0) + 1;
 
+  const textToCompress = String(nextState.rawBuffer ?? "");
+
   const callProvider = async (p: string) => {
     if (provider === "gemini") {
       const r = await geminiReply({ prompt: p, rules: "OUTPUT JSON ONLY." });
@@ -275,13 +268,12 @@ if (shouldCompress) {
     return { text: r.text };
   };
 
-  // ✅ FAIL-OPEN: se la compressione fallisce, NON bloccare la risposta
   try {
     const newPacket = await compressToMemoryPacketV2(
       {
         existingMemory: nextState.compressedMemory,
-        historyText,
-        userMessage: userPrompt,
+        historyText: textToCompress,
+        userMessage: "",
         nextVersion,
       },
       callProvider
@@ -290,11 +282,14 @@ if (shouldCompress) {
     nextState.compressedMemory = newPacket;
     nextState.memoryVersion = nextVersion;
     nextState.pendingCompression = false;
+
+    // ✅ svuota rawBuffer: ora è tutto nel packet
+    nextState.rawBuffer = "";
   } catch (e) {
-    // Rimanda la compressione a un giro successivo, ma rispondi comunque
     nextState.pendingCompression = true;
   }
 }
+
 
 
     // ======================================================
@@ -302,7 +297,7 @@ if (shouldCompress) {
     // ======================================================
 const assembledPrompt = buildAssembledPrompt({
   memoryPacket: nextState.compressedMemory,
-  rawBuffer: String(incomingMemoryState?.rawBuffer ?? ""), // ✅ prende la history lunga dal client
+  rawBuffer: String(nextState?.rawBuffer ?? ""),
   historyText,
   userPrompt,
 });

@@ -34,9 +34,8 @@ export async function geminiReply(args: {
   // Esempi tipici: "gemini-2.5-flash", "gemini-2.5-pro", ecc.
   const model = "gemini-2.5-flash";
 
-  const system = args.rules?.trim()
-    ? `Regole operative (vincoli):\n${args.rules.trim()}`
-    : "Sei Anova β. Rispondi in modo utile e operativo.";
+const system = args.rules?.trim() ? args.rules.trim() : "";
+
 
   // --------------------------
   // Gemini generateContent (testo)
@@ -52,18 +51,22 @@ export async function geminiReply(args: {
       // preferisco header (pulito, niente querystring)
       "x-goog-api-key": apiKey,
     },
-    body: JSON.stringify({
-      // system instruction (Gemini)
-      systemInstruction: {
-        parts: [{ text: system }],
-      },
-      contents: [
-        {
-          role: "user",
-          parts: [{ text: args.prompt }],
+body: JSON.stringify({
+  ...(system
+    ? {
+        systemInstruction: {
+          parts: [{ text: system }],
         },
-      ],
-    }),
+      }
+    : {}),
+  contents: [
+    {
+      role: "user",
+      parts: [{ text: args.prompt }],
+    },
+  ],
+}),
+
   });
 
   if (!res.ok) {

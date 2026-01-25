@@ -32,11 +32,11 @@ export async function claudeReply(args: {
 
   // ✅ Scegli il modello qui (coerente con la tua pricing table in cost.ts)
   // Esempi: "claude-3-5-sonnet-20241022", "claude-3-5-haiku-20241022", ecc.
-  const model = "claude-3-5-sonnet-20241022";
+  const model = "claude-3-5-haiku-20241022";
 
-  const system = args.rules?.trim()
-    ? `Regole operative (vincoli):\n${args.rules.trim()}`
-    : "Sei Anova β. Rispondi in modo utile e operativo.";
+
+const system = args.rules?.trim() ? args.rules.trim() : "";
+
 
   // --------------------------
   // Anthropic Messages API (testo)
