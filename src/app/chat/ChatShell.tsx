@@ -166,6 +166,15 @@ export default function ChatShell() {
   // =========================
   const [tabs, setTabs] = useState<TabDoc[]>([]);
   const [activeTabId, setActiveTabId] = useState<string | null>(null);
+// =========================
+// TAB FOCUS — anti-override (snapshot safe)
+// =========================
+const activeTabIdRef = useRef<string | null>(null);
+useEffect(() => {
+  activeTabIdRef.current = activeTabId;
+}, [activeTabId]);
+
+const pendingFocusTabIdRef = useRef<string | null>(null);
 
   const visibleTabs = useMemo(() => tabs.filter((t) => !t.deleted), [tabs]);
 
@@ -360,6 +369,22 @@ export default function ChatShell() {
       setTabs(rows);
 
       const alive = rows.filter((t: any) => !t?.deleted);
+const aliveIds = new Set(alive.map((t) => t.id));
+
+// 1) se ho una tab appena creata, la rendo attiva appena compare nello snapshot
+const pending = pendingFocusTabIdRef.current;
+if (pending && aliveIds.has(pending)) {
+  setActiveTabId(pending);
+  pendingFocusTabIdRef.current = null;
+  return;
+}
+
+// 2) se l’attuale active è valida, NON toccare
+const current = activeTabIdRef.current;
+if (current && aliveIds.has(current)) return;
+
+// 3) fallback: se non c’è active, prendo la prima viva
+if (!current && alive.length > 0) setActiveTabId(alive[0].id);
 
       // bootstrap main tab se vuoto
       if (rows.length === 0 && !didBootstrapMainTabRef.current) {
@@ -383,11 +408,7 @@ export default function ChatShell() {
         return;
       }
 
-      // set active se manca
-      if (!activeTabId && alive.length > 0) setActiveTabId(alive[0].id);
-
       // se active sparisce, riassegna
-      const aliveIds = new Set(alive.map((t) => t.id));
       if (activeTabId && !aliveIds.has(activeTabId) && alive.length > 0) {
         setActiveTabId(alive[0].id);
       }
@@ -497,22 +518,29 @@ async function setTabProvider(next: "openai" | "gemini" | "claude") {
     setEditingTitle(false);
   }
 
-  async function addTab() {
-    if (!sessionId || !userId) return;
-    const id = newId();
+async function addTab() {
+  if (!sessionId || !userId) return;
 
-    await setDoc(doc(db, "sessions", sessionId, "tabs", id), {
-      title: null,
-      provider: "openai",
-      rules: "",
-      deleted: false,
-      createdAt: serverTimestamp(),
-      updatedAt: serverTimestamp(),
-      owner: userId,
-    });
+  const id = newId();
 
-    setActiveTabId(id);
-  }
+  // ✅ SWITCH IMMEDIATO (prima ancora di Firestore)
+  pendingFocusTabIdRef.current = id;
+  setActiveTabId(id);
+  setMessages([]); // nuova tab = chat vuota
+  setInput("");
+
+  // poi persistiamo su Firestore
+  await setDoc(doc(db, "sessions", sessionId, "tabs", id), {
+    title: null,
+    provider: "openai",
+    rules: "",
+    deleted: false,
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+    owner: userId,
+  });
+}
+
 
   async function closeTab(tabId: string) {
     if (!sessionId) return;
