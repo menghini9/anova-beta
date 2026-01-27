@@ -35,7 +35,10 @@ export async function claudeReply(args: {
   const model = "claude-3-5-haiku-20241022";
 
 
-const system = args.rules?.trim() ? args.rules.trim() : "";
+const system = args.rules?.trim()
+  ? `Regole operative:\n${args.rules.trim()}`
+  : "You are Claude, a large language model created by Anthropic.";
+
 
 
   // --------------------------

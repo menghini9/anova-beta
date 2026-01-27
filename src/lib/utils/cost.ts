@@ -21,6 +21,9 @@ export type CostResult = {
   outputCost: number;
   totalCost: number;
 };
+// FX semplice (aggiornalo quando vuoi)
+const USD_TO_EUR = 0.92;
+const usdToEur = (v: number) => v * USD_TO_EUR;
 
 // =========================
 // 2) PRICING TABLE (€/1M tokens)
@@ -34,17 +37,20 @@ const OPENAI_PRICING_EUR_PER_1M: Record<string, Pricing> = {
   "gpt-4o-mini": { inPer1M: 1.0, outPer1M: 4.0 },
 };
 
-// --- Gemini (placeholder)
+// --- Gemini (EUR / 1M tokens)
 const GEMINI_PRICING_EUR_PER_1M: Record<string, Pricing> = {
-  "gemini-2.5-flash": { inPer1M: 0, outPer1M: 0 },
-  "gemini-2.5-pro": { inPer1M: 0, outPer1M: 0 },
+  "gemini-2.5-flash": { inPer1M: 0.3, outPer1M: 0.6 },
+  "gemini-2.5-pro": { inPer1M: 3.0, outPer1M: 6.0 },
+  "gemini-2.5-flash-lite": { inPer1M: 0.1, outPer1M: 0.2 },
 };
+
 
 // --- Claude (placeholder)
 const CLAUDE_PRICING_EUR_PER_1M: Record<string, Pricing> = {
-  "claude-3-5-sonnet-20241022": { inPer1M: 0, outPer1M: 0 },
-  "claude-3-5-haiku-20241022": { inPer1M: 0, outPer1M: 0 },
+  "claude-3-5-sonnet-20241022": { inPer1M: usdToEur(3.0), outPer1M: usdToEur(15.0) },
+  "claude-3-5-haiku-20241022":  { inPer1M: usdToEur(1.0), outPer1M: usdToEur(5.0) },
 };
+
 
 // =========================
 // 3) HELPERS
@@ -61,7 +67,7 @@ function roundMoney(v: number) {
 // Se il model non è noto, fallback coerente per provider
 function getPricing(provider: ProviderId, model: string): Pricing {
   if (provider === "openai") {
-    return OPENAI_PRICING_EUR_PER_1M[model] ?? OPENAI_PRICING_EUR_PER_1M["gpt-5"];
+    return OPENAI_PRICING_EUR_PER_1M[model] ?? OPENAI_PRICING_EUR_PER_1M["gpt-4o-mini"];
   }
   if (provider === "gemini") {
     return (
@@ -73,7 +79,7 @@ function getPricing(provider: ProviderId, model: string): Pricing {
   // provider === "claude"
   return (
     CLAUDE_PRICING_EUR_PER_1M[model] ??
-    CLAUDE_PRICING_EUR_PER_1M["claude-3-5-sonnet-20241022"] ??
+    CLAUDE_PRICING_EUR_PER_1M["claude-3-5-haiku-20241022"] ??
     { inPer1M: 0, outPer1M: 0 }
   );
 }

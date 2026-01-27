@@ -33,7 +33,10 @@ export async function openAIReply(args: {
   // ✅ Scegli il modello che vuoi usare qui (coerente con la tua pricing table in cost.ts)
   const model = "gpt-4o-mini"; // cambia se vuoi: "gpt-4.1", "gpt-4o-mini", "gpt-5", ecc.
 
-const system = args.rules?.trim() ? args.rules.trim() : "";
+const system = args.rules?.trim()
+  ? `Regole operative:\n${args.rules.trim()}`
+  : "You are an OpenAI language model created by OpenAI.";
+
 
 
   // --------------------------

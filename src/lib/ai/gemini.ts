@@ -34,7 +34,10 @@ export async function geminiReply(args: {
   // Esempi tipici: "gemini-2.5-flash", "gemini-2.5-pro", ecc.
   const model = "gemini-2.5-flash";
 
-const system = args.rules?.trim() ? args.rules.trim() : "";
+const system = args.rules?.trim()
+  ? `Regole operative:\n${args.rules.trim()}`
+  : "You are Gemini, a large language model created by Google.";
+
 
 
   // --------------------------
