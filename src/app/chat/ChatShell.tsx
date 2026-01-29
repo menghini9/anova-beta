@@ -28,6 +28,10 @@ import ChatHeader from "./components/ChatHeader";
 import ChatSidePanels from "./components/ChatSidePanels";
 import ChatMessagesView from "./components/ChatMessages";
 import ChatInput from "./components/ChatInput";
+// ======================================================
+// MEMORY UI — Panel
+// ======================================================
+import MemoryPanel from "./components/MemoryPanel";
 
 // =========================
 // localStorage helpers
@@ -63,11 +67,27 @@ function safeJsonParse<T>(raw: string | null, fallback: T): T {
     return fallback;
   }
 }
-
+// ======================================================
+// NUMBERS — safe cast
+// ======================================================
 function n(v: any) {
   const x = Number(v);
   return Number.isFinite(x) ? x : 0;
 }
+// ======================================================
+// MEMORY — sanitize assistant text (no meta/identity)
+// ======================================================
+function sanitizeAssistantForMemory(t: string) {
+  const s = String(t ?? "");
+  return s
+    .replace(/sono\s+anova[^.\n]*[.\n]/gi, "")
+    .replace(/anov[aà]\s*β/gi, "")
+    .replace(/tuo\s+assistente[^.\n]*[.\n]/gi, "")
+    .replace(/ho\s+memorizzat[oa][^.\n]*[.\n]/gi, "")
+    .replace(/compress(or|ione)[^.\n]*[.\n]/gi, "")
+    .trim();
+}
+
 // =========================
 // MEMORY V2 — Types (client-side)
 // (shape minimale, uguale al server)
@@ -219,6 +239,35 @@ const pendingFocusTabIdRef = useRef<string | null>(null);
   // SIDEBAR
   // =========================
   const [sidebarOpen, setSidebarOpen] = useState(true);
+// ======================================================
+// MEMORY UI — State (panel + banner + preview + edit queue)
+// ======================================================
+const [memoryPanelOpen, setMemoryPanelOpen] = useState(false);
+
+// ultimo snapshot per UI (arriva dal server)
+const [memoryMetaUI, setMemoryMetaUI] = useState<any | null>(null);
+const [providerPacketPreviewUI, setProviderPacketPreviewUI] = useState<any | null>(null);
+
+// banner visibile (compression/edit)
+const [memoryBanner, setMemoryBanner] = useState<{
+  kind: "compressed" | "edited";
+  text: string;
+} | null>(null);
+
+const bannerTimerRef = useRef<any>(null);
+
+// coda edit memoria: quando l’utente salva, lo mandiamo alla prossima chiamata API
+const [pendingMemoryEdit, setPendingMemoryEdit] = useState<{
+  mode: "replace_packet";
+  packet: any;
+  note?: string;
+} | null>(null);
+
+function showMemoryBanner(kind: "compressed" | "edited", text: string) {
+  setMemoryBanner({ kind, text });
+  if (bannerTimerRef.current) clearTimeout(bannerTimerRef.current);
+  bannerTimerRef.current = setTimeout(() => setMemoryBanner(null), 6000);
+}
 
   // =========================
   // COSTI & TOKENS — BOOTSTRAP da localStorage (1 volta)
@@ -576,6 +625,34 @@ async function addTab() {
     if (rulesDebounceRef.current) clearTimeout(rulesDebounceRef.current);
     rulesDebounceRef.current = setTimeout(() => persistTabRules(next), 600);
   }
+// ======================================================
+// MEMORY UI — Save edited packet
+// - salva subito in localStorage (memoria effettiva lato client)
+// - mette in coda l'edit da inviare al server alla prossima request
+// ======================================================
+function onSaveMemoryPacket(packet: any, note?: string) {
+  if (!sessionId || !activeTabId) return;
+
+  // 1) aggiorna lo stato memoria locale (localStorage)
+  const memState = loadMemoryState(sessionId, activeTabId);
+  const next: MemoryStateLite = {
+    ...memState,
+    compressedMemory: packet,
+    rawBuffer: "", // se c'è packet, rawBuffer inutile
+    pendingCompression: false,
+    memoryVersion: n(memState.memoryVersion) + 1,
+  };
+  saveMemoryState(sessionId, activeTabId, next);
+
+  // 2) coda edit da inviare al server (trasparenza + versioning server-side)
+  setPendingMemoryEdit({
+    mode: "replace_packet",
+    packet,
+    note: (note || "").trim() || "User edit",
+  });
+
+  showMemoryBanner("edited", "✍️ Memoria aggiornata (salvata).");
+}
 
   async function sendMessage(e: FormEvent) {
     e.preventDefault();
@@ -674,7 +751,11 @@ body: JSON.stringify({
 
   // ✅ SOLO se pendingCompression=true (altrimenti stringa vuota)
   compressText,
+
+  // ✅ EDIT memoria (se presente)
+  memoryEdit: pendingMemoryEdit ?? null,
 }),
+
 
 
 
@@ -693,75 +774,46 @@ if (!res.ok) {
 
 aiText = data?.finalText ?? "⚠️ Risposta vuota.";
 
-      
-// =========================
-// MEMORY V2 — sanitize assistant text (no "Sono Anova", no meta)
-// =========================
-function sanitizeAssistantForMemory(t: string) {
-  const s = String(t ?? "");
+      // ======================================================
+// MEMORY UI — ingest server meta (event + preview)
+// ======================================================
+if (data?.memoryMeta) setMemoryMetaUI(data.memoryMeta);
+if (data?.providerPacketPreview) setProviderPacketPreviewUI(data.providerPacketPreview);
 
-  return s
-    // presentazioni / identità
-    .replace(/sono\s+anova[^.\n]*[.\n]/gi, "")
-    .replace(/anov[aà]\s*β/gi, "")
-    .replace(/tuo\s+assistente[^.\n]*[.\n]/gi, "")
-    // meta: "ho memorizzato", "compressore", ecc.
-    .replace(/ho\s+memorizzat[oa][^.\n]*[.\n]/gi, "")
-    .replace(/compress(or|ione)[^.\n]*[.\n]/gi, "")
-    .trim();
+const ev = data?.memoryEvent ?? null;
+if (ev?.type === "compressed") {
+  const reason = String(ev?.reason ?? "");
+  const ver = String(ev?.afterVersion ?? "");
+  showMemoryBanner("compressed", `🧠 Memoria compressa (${reason}) — v${ver}`);
+}
+if (ev?.type === "edited") {
+  const ver = String(ev?.afterVersion ?? "");
+  showMemoryBanner("edited", `✍️ Memoria modificata — v${ver}`);
 }
 
-// =========================
-// MEMORY V2 — update local state (rawBuffer cresce sempre)
-// =========================
+// Se abbiamo inviato un edit, lo consumiamo dopo una response valida
+if (pendingMemoryEdit) setPendingMemoryEdit(null);
+
+
 if (data?.memoryState && sessionId && activeTabId) {
   const next = data.memoryState as MemoryStateLite;
 
   const safeAi = sanitizeAssistantForMemory(aiText);
-  const cleanAiText = String(aiText ?? "")
-  .replace(/Sono\s+Anova[^.\n]*/gi, "")
-  .replace(/Anova\s*β/gi, "")
-  .trim();
+  const cleanedAi = String(safeAi)
+    .replace(/Sono\s+Anova[^.\n]*[.\n]?/gi, "")
+    .replace(/\bAnova\b/gi, "")
+    .trim();
 
-// =========================
-// MEMORY V2 — update local state (rawBuffer cresce sempre)
-// Regola: se la risposta contiene "Anova", NON la persistiamo in rawBuffer
-// (così non auto-alimentiamo l’identità finta)
-// =========================
-if (data?.memoryState && sessionId && activeTabId) {
-  const next = data.memoryState as MemoryStateLite;
+  const turnBlock = `USER: ${trimmed}\nASSISTANT: ${cleanedAi}\n\n`;
 
-  const cleanedAiText = String(aiText ?? "")
-    .replace(/Sono\s+Anova[^.\n]*[.\n]?/gi, "")   // taglia frasi tipo "Sono Anova..."
-    .replace(/\bAnova\b/gi, "");                 // rimuove il nome se compare
+  // se non c'è packet, cresce rawBuffer
+  next.rawBuffer = String(next.rawBuffer ?? "") + turnBlock;
 
-  const turnBlock = `USER: ${trimmed}\nASSISTANT: ${cleanedAiText}\n\n`;
-  next.rawBuffer = String((next as any).rawBuffer ?? "") + turnBlock;
-
-  // Se esiste compressedMemory, il rawBuffer NON serve più: lo azzeriamo (evita doppio contesto)
+  // se c'è packet, rawBuffer non serve
   if (next.compressedMemory) next.rawBuffer = "";
 
   saveMemoryState(sessionId, activeTabId, next);
 }
-
-
-
-  const cleanedAiText = String(aiText ?? "")
-  .replace(/Sono\s+Anova[^.\n]*[.\n]?/gi, "")
-  .replace(/\bAnova\b/gi, "");
-
-const turnBlock = `USER: ${trimmed}\nASSISTANT: ${cleanedAiText}\n\n`;
-
-next.rawBuffer = String(next.rawBuffer ?? "") + turnBlock;
-
-// Se esiste compressedMemory, il rawBuffer NON serve più
-if ((next as any).compressedMemory) next.rawBuffer = "";
-
-
-  saveMemoryState(sessionId, activeTabId, next);
-}
-
-
 
       // =========================
       // KPI — COSTI & TOKENS (Last + Total)
@@ -861,24 +913,45 @@ if ((next as any).compressedMemory) next.rawBuffer = "";
       <section className="flex-1 min-w-0 flex flex-col">
         {/* Header */}
         <div className="h-14 shrink-0 border-b border-white/10 bg-neutral-950/60 backdrop-blur flex items-center">
-          <div className="mx-auto w-full max-w-5xl px-6 flex items-center justify-between">
-<ChatHeader
-  sessionId={sessionId}
-  sessionTitle={sessionTitle}
-  setSessionTitle={setSessionTitle}
-  editingTitle={editingTitle}
-  setEditingTitle={setEditingTitle}
-  onCommitTitle={commitSessionTitle}
-  lastCost={lastCost}
-  totalCost={totalCost}
-  lastTokens={lastTokens}
-  totalTokens={totalTokens}
-  activeProvider={activeTab?.provider ?? "openai"}   // ✅
-  setActiveProvider={setTabProvider}                  // ✅
-/>
+<div className="mx-auto w-full max-w-5xl px-6 flex items-center justify-between">
+  <ChatHeader
+    sessionId={sessionId}
+    sessionTitle={sessionTitle}
+    setSessionTitle={setSessionTitle}
+    editingTitle={editingTitle}
+    setEditingTitle={setEditingTitle}
+    onCommitTitle={commitSessionTitle}
+    lastCost={lastCost}
+    totalCost={totalCost}
+    lastTokens={lastTokens}
+    totalTokens={totalTokens}
+    activeProvider={activeTab?.provider ?? "openai"}
+    setActiveProvider={setTabProvider}
+    onOpenMemory={() => setMemoryPanelOpen(true)}
 
-          </div>
+  />
+</div>
+
         </div>
+{/* ====================================================== */}
+{/* MEMORY UI — Banner (compression / edit) */}
+{/* ====================================================== */}
+{memoryBanner && (
+  <div className="shrink-0 border-b border-white/10 bg-neutral-950/80">
+    <div className="mx-auto w-full max-w-5xl px-6 py-2 text-[12px] text-white/85 flex items-center justify-between">
+      <div>
+        {memoryBanner.text}
+      </div>
+      <button
+        className="px-3 py-1 rounded bg-white/10 hover:bg-white/15"
+        onClick={() => setMemoryBanner(null)}
+        title="Chiudi"
+      >
+        ×
+      </button>
+    </div>
+  </div>
+)}
 
         {/* Tabs + Rules */}
         <div className="shrink-0 border-b border-white/10 bg-neutral-950/60 backdrop-blur">
@@ -986,6 +1059,18 @@ if ((next as any).compressedMemory) next.rawBuffer = "";
           </div>
         </div>
       </section>
+      {/* ====================================================== */}
+{/* MEMORY UI — Panel */}
+{/* ====================================================== */}
+<MemoryPanel
+  open={memoryPanelOpen}
+  onClose={() => setMemoryPanelOpen(false)}
+  memoryState={sessionId && activeTabId ? loadMemoryState(sessionId, activeTabId) : null}
+  memoryMeta={memoryMetaUI}
+  providerPacketPreview={providerPacketPreviewUI}
+  onSaveMemoryPacket={onSaveMemoryPacket}
+/>
+
     </main>
   );
 }

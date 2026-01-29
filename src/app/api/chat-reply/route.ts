@@ -42,6 +42,22 @@ function n(v: any): number {
   const x = Number(v);
   return Number.isFinite(x) ? x : 0;
 }
+// =========================
+// MEMORY — safe stringify (guard)
+// evita packet enormi o JSON rotti
+// =========================
+function safeStringify(
+  obj: any,
+  maxChars: number
+): { ok: boolean; text: string } {
+  try {
+    const text = JSON.stringify(obj);
+    if (text.length > maxChars) return { ok: false, text: "" };
+    return { ok: true, text };
+  } catch {
+    return { ok: false, text: "" };
+  }
+}
 
 // =========================
 // NORMALIZER — usage
@@ -187,6 +203,11 @@ export async function POST(req: Request) {
     const historyText = String(body?.historyText ?? "").trim();
     const incomingMemoryState: MemoryState =
       (body?.memoryState as MemoryState) ?? emptyMemoryState();
+// ======================================================
+// MEMORY — EDIT input (opzionale)
+// Il client può sostituire la memoria compressa
+// ======================================================
+const memoryEdit = body?.memoryEdit ?? null;
 
     const memoryPacket = (incomingMemoryState?.compressedMemory ??
       null) as MemoryPacketV2 | null;
@@ -224,6 +245,22 @@ const approxContextTokens = estimateContextTokens({
   rules,
   userPrompt,
 });
+// ======================================================
+// MEMORY — UI EVENT (compressione / edit)
+// ======================================================
+let memoryEvent:
+  | {
+      type: "compressed";
+      reason: "SOFT" | "HARD";
+      beforeTokens: number;
+      afterVersion: number;
+    }
+  | {
+      type: "edited";
+      note?: string;
+      afterVersion: number;
+    }
+  | null = null;
 
 
 const nextState: MemoryState = {
@@ -235,6 +272,25 @@ const nextState: MemoryState = {
   // ✅ rawBuffer resta lato client, ma lo portiamo avanti nello state
   rawBuffer: String(incomingMemoryState?.rawBuffer ?? ""),
 };
+// ======================================================
+// MEMORY — APPLY USER EDIT (replace packet)
+// Nota: versione incrementata, rawBuffer svuotato
+// ======================================================
+if (memoryEdit?.mode === "replace_packet" && memoryEdit?.packet) {
+  const check = safeStringify(memoryEdit.packet, 60_000);
+  if (check.ok) {
+    nextState.compressedMemory = memoryEdit.packet as MemoryPacketV2;
+    nextState.rawBuffer = "";
+    nextState.pendingCompression = false;
+    nextState.memoryVersion = (nextState.memoryVersion ?? 0) + 1;
+
+    memoryEvent = {
+      type: "edited",
+      note: String(memoryEdit?.note ?? "").trim() || undefined,
+      afterVersion: nextState.memoryVersion,
+    };
+  }
+}
 
 
     // Soft trigger: arma compressione
@@ -285,6 +341,16 @@ if (shouldCompress) {
 
     // ✅ svuota rawBuffer: ora è tutto nel packet
     nextState.rawBuffer = "";
+        // ======================================================
+    // MEMORY — EVENT: compressione avvenuta
+    // ======================================================
+    memoryEvent = {
+      type: "compressed",
+      reason: mustCompressNow ? "HARD" : "SOFT",
+      beforeTokens: approxContextTokens,
+      afterVersion: nextState.memoryVersion,
+    };
+
   } catch (e) {
     nextState.pendingCompression = true;
   }
@@ -348,6 +414,17 @@ const costRaw = computeProviderCost({
 // E) Cost norm (contratto stabile)
 // ======================================================
 const costNorm = normalizeCost(costRaw);
+// ======================================================
+// DEBUG — PROVIDER PACKET PREVIEW (trasparenza UI)
+// ======================================================
+const providerPacketPreview = {
+  provider,
+  model: model ?? null,
+  rules,
+  memoryPacket: nextState.compressedMemory,
+  historyText,
+  userPrompt,
+};
 
     return NextResponse.json({
       // =========================
@@ -377,6 +454,9 @@ const costNorm = normalizeCost(costRaw);
             MEMORY_POLICY.LIMIT_TOKENS_SOFT * MEMORY_POLICY.WARN_RED_RATIO,
         },
       },
+memoryEvent,
+providerPacketPreview,
+
     });
   } catch (err: any) {
     return NextResponse.json(

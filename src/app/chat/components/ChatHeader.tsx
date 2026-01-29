@@ -22,6 +22,8 @@ type Props = {
   setEditingTitle: (v: boolean) => void;
   activeProvider: "openai" | "gemini" | "claude";
   setActiveProvider: (p: "openai" | "gemini" | "claude") => void;
+  // ✅ MEMORY UI
+  onOpenMemory?: () => void;
 
   onCommitTitle: () => void | Promise<void>;
 
@@ -62,6 +64,7 @@ export default function ChatHeader({
   totalTokens,
   activeProvider,
   setActiveProvider,
+  onOpenMemory,
 }: Props) {
 
   const label = useMemo(() => {
@@ -106,6 +109,7 @@ export default function ChatHeader({
         <div className="shrink-0 flex items-center gap-3">
                     {/* Provider selector */}
           <select
+          
             value={activeProvider}
             onChange={(e) => setActiveProvider(e.target.value as any)}
             className="h-9 rounded-xl border border-white/15 bg-black/40 px-3 text-[12px] text-white/85 outline-none focus:border-white/25"
@@ -115,6 +119,15 @@ export default function ChatHeader({
             <option value="gemini">Gemini</option>
             <option value="claude">Claude</option>
           </select>
+{onOpenMemory && (
+  <button
+    onClick={onOpenMemory}
+    className="h-9 rounded-xl border border-white/15 bg-black/40 px-3 text-[12px] text-white/85 outline-none hover:bg-white/10 focus:border-white/25"
+    title="Apri pannello memoria"
+  >
+    MEMORY
+  </button>
+)}
 
           <div className="h-4 w-px bg-white/10 mx-1" />
 
