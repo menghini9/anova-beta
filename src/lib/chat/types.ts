@@ -23,8 +23,16 @@ export type TabDoc = {
 };
 
 export type ChatMessage = {
-  id?: string;
-  sender: "user" | "anova";
+  id: string;
+  sender: "user" | "assistant";
   text: string;
   createdAt?: any;
+
+  // ✅ NUOVO: metadata agent (opzionali)
+  agentId?: string | null;
+  agentName?: string | null;
+  agentProvider?: "openai" | "gemini" | "claude" | string | null;
+  agentModel?: string | null;
+  kind?: "group" | "agent" | "fusion" | string;
 };
+
