@@ -38,6 +38,34 @@ import AgentsOverlay from "./components/AgentsOverlay";
 const hasWindow = () => typeof window !== "undefined";
 const safeGet = (k: string) => (hasWindow() ? window.localStorage.getItem(k) : null);
 const safeSet = (k: string, v: string) => hasWindow() && window.localStorage.setItem(k, v);
+// =========================
+// AGENTS — localStorage helpers (session-level)
+// =========================
+type AgentProvider = "openai" | "gemini" | "claude";
+
+type AgentLite = {
+  id: string;
+  name: string;
+  enabled: boolean;
+  provider: AgentProvider;
+  model: string;
+  rules: string;
+};
+
+function agentsKey(sessionId: string) {
+  return `anova_agents_${sessionId}`;
+}
+
+function loadAgentsLite(sessionId: string): AgentLite[] {
+  const raw = safeGet(agentsKey(sessionId));
+  if (!raw) return [];
+  try {
+    const v = JSON.parse(raw);
+    return Array.isArray(v) ? (v as AgentLite[]) : [];
+  } catch {
+    return [];
+  }
+}
 
 // =========================
 // COST & TOKENS — Persistenza (localStorage)
@@ -159,16 +187,8 @@ export default function ChatShell() {
   // =========================
   const [agentsOpen, setAgentsOpen] = useState(false);
 // =========================
-// AGENTS — runtime state (per mostrare in chat)
+// AGENTS — runtime view
 // =========================
-type AgentLite = {
-  id: string;
-  name: string;
-  enabled: boolean;
-  provider: "openai" | "gemini" | "claude";
-  model: string;
-  rules: string;
-};
 
 const [sessionAgents, setSessionAgents] = useState<AgentLite[]>([]);
 
@@ -489,7 +509,9 @@ useEffect(() => {
   } catch {
     setSessionAgents([]);
   }
-}, [sessionId]);
+  // 🔥 ricarica anche quando chiudi overlay (dopo "Applica")
+}, [sessionId, agentsOpen]);
+
 
   // =========================
   // SEND MESSAGE (single provider for now)
@@ -529,77 +551,96 @@ useEffect(() => {
     // memoria condivisa: se OFF, non mandiamo nulla
     const memState = memoryEnabled ? loadMemoryState(sessionId) : emptyMemoryState();
     const compressText = memoryEnabled && memState?.pendingCompression ? (memState.rawBuffer ?? "") : "";
+// =========================
+// AGENTS — active list (source = sessionAgents)
+// =========================
+const activeAgents = (sessionAgents || []).filter((a) => a && a.enabled);
 
-    let aiText = "…";
-    try {
-      const res = await fetch("/api/chat-reply", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          prompt: trimmed,
-
-          // per ora provider default “gpt/openai”
-          provider: "openai",
+const fanoutAgents =
+  activeAgents.length > 0
+    ? activeAgents
+    : [
+        {
+          id: "default",
+          name: "Default",
+          enabled: true,
+          provider: "openai" as const,
+          model: "gpt",
           rules: "",
+        },
+      ];
 
-          sessionId,
+// =========================
+// FAN-OUT — 1 call per agent attivo
+// =========================
+let lastCostSum = 0;
+let lastUsageSum: UsageLite = { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 };
 
-          historyText,
+// memoria condivisa: base comune a tutti gli agent
+let memStateBase = memoryEnabled ? loadMemoryState(sessionId) : emptyMemoryState();
+let compressTextBase =
+  memoryEnabled && memStateBase?.pendingCompression ? (memStateBase.rawBuffer ?? "") : "";
+// =========================
+// SHARED CONTEXT (lite) — cheap cross-agent visibility
+// =========================
+let sharedContextLite = ""; // cresce man mano che arrivano risposte
+const SHARED_MAX_CHARS = 1400; // cap duro per non far lievitare token
 
-          // memoria solo se ON
-          memoryState: memoryEnabled ? memState : null,
-          compressText: memoryEnabled ? compressText : "",
-          memoryEdit: memoryEnabled ? pendingMemoryEdit ?? null : null,
-        }),
-      });
+function clipText(s: string, max: number) {
+  const t = String(s ?? "").trim();
+  return t.length <= max ? t : t.slice(0, max).trim() + "…";
+}
 
-      const data = await res.json().catch(() => ({}));
+function appendShared(shared: string, agentName: string, agentText: string) {
+  const line = `- ${agentName}: ${clipText(agentText, 260)}`;
+  const next = shared ? `${shared}\n${line}` : line;
+  return clipText(next, SHARED_MAX_CHARS);
+}
 
-      if (!res.ok) {
-        console.error("chat-reply HTTP", res.status, data);
-        aiText = data?.error ? `❌ ${String(data.error)}` : `❌ Errore API (${res.status})`;
-        throw new Error(aiText);
-      }
+for (const ag of fanoutAgents) {
+  let aiTextLocal = "…";
 
-      aiText = data?.finalText ?? "⚠️ Risposta vuota.";
+  try {
+    const res = await fetch("/api/chat-reply", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+body: JSON.stringify({
+  prompt: trimmed,
 
-      // ingest meta
-      if (data?.memoryMeta) setMemoryMetaUI(data.memoryMeta);
-      if (data?.providerPacketPreview) setProviderPacketPreviewUI(data.providerPacketPreview);
+  provider: ag.provider,
+  model: ag.model || "",
 
-      const ev = data?.memoryEvent ?? null;
-      if (ev?.type === "compressed") {
-        showMemoryBanner("compressed", `🧠 Memoria compressa — v${String(ev?.afterVersion ?? "")}`);
-      }
-      if (ev?.type === "edited") {
-        showMemoryBanner("edited", `✍️ Memoria modificata — v${String(ev?.afterVersion ?? "")}`);
-      }
+  // rules = SOLO ruolo specifico agente (niente “obbligo operativo”)
+  rules: ag.rules || "",
 
-      if (pendingMemoryEdit) setPendingMemoryEdit(null);
+  // ✅ nuovo campo dedicato, corto e cappato
+  sharedContext: sharedContextLite,
 
-      // salva memoria session-level
-      if (memoryEnabled && data?.memoryState && sessionId) {
-        const next = data.memoryState as MemoryStateLite;
 
-        const safeAi = sanitizeAssistantForMemory(aiText);
-        const cleanedAi = String(safeAi)
-          .replace(/Sono\s+Anova[^.\n]*[.\n]?/gi, "")
-          .replace(/\bAnova\b/gi, "")
-          .trim();
+  sessionId,
+  historyText,
 
-        const turnBlock = `USER: ${trimmed}\nASSISTANT: ${cleanedAi}\n\n`;
+  memoryState: memoryEnabled ? memStateBase : null,
+  compressText: memoryEnabled ? compressTextBase : "",
+  memoryEdit: memoryEnabled ? pendingMemoryEdit ?? null : null,
+}),
 
-        next.rawBuffer = String(next.rawBuffer ?? "") + turnBlock;
-        if (next.compressedMemory) next.rawBuffer = "";
+    });
 
-        saveMemoryState(sessionId, next);
-      }
+    const data = await res.json().catch(() => ({}));
 
-      // KPI
+    if (!res.ok) {
+      aiTextLocal = data?.error
+        ? `❌ ${String(data.error)}`
+        : `❌ Errore API (${res.status})`;
+    } else {
+      aiTextLocal = data?.finalText ?? "⚠️ Risposta vuota.";
+// aggiorna sharedContextLite per i prossimi agent (ordine sequenziale)
+sharedContextLite = appendShared(sharedContextLite, ag.name, aiTextLocal);
+
+      // KPI aggregati
       const cost = data?.cost ?? null;
-      const lastC = n(cost?.totalCost);
-      setLastCost(lastC);
-      setTotalCost((prev) => prev + lastC);
+      lastCostSum += n(cost?.totalCost);
 
       const usageRaw =
         data?.usage ??
@@ -610,24 +651,75 @@ useEffect(() => {
         data?.providerUsage ??
         null;
 
-      const lastU = normUsage(usageRaw);
-      setLastTokens(lastU);
-      setTotalTokens((prev) => addUsage(prev, lastU));
-    } catch {
-      aiText = "❌ Errore API.";
+      lastUsageSum = addUsage(lastUsageSum, normUsage(usageRaw));
+
+      // memoria condivisa: aggiorna base così il prossimo agent vede contesto aggiornato
+      if (memoryEnabled && data?.memoryState) {
+        const next = data.memoryState as MemoryStateLite;
+
+        const safeAi = sanitizeAssistantForMemory(aiTextLocal);
+        const cleanedAi = String(safeAi)
+          .replace(/Sono\s+Anova[^.\n]*[.\n]?/gi, "")
+          .replace(/\bAnova\b/gi, "")
+          .trim();
+
+        const turnBlock = `USER: ${trimmed}\nASSISTANT(${ag.name}): ${cleanedAi}\n\n`;
+
+        next.rawBuffer = String(next.rawBuffer ?? "") + turnBlock;
+        if (next.compressedMemory) next.rawBuffer = "";
+
+        saveMemoryState(sessionId, next);
+        memStateBase = next;
+        compressTextBase =
+          memoryEnabled && memStateBase?.pendingCompression ? (memStateBase.rawBuffer ?? "") : "";
+      }
+
+      // meta UI (solo display)
+      if (data?.memoryMeta) setMemoryMetaUI(data.memoryMeta);
+      if (data?.providerPacketPreview) setProviderPacketPreviewUI(data.providerPacketPreview);
+
+      const ev = data?.memoryEvent ?? null;
+      if (ev?.type === "compressed") {
+        showMemoryBanner("compressed", `🧠 Memoria compressa — v${String(ev?.afterVersion ?? "")}`);
+      }
+      if (ev?.type === "edited") {
+        showMemoryBanner("edited", `✍️ Memoria modificata — v${String(ev?.afterVersion ?? "")}`);
+      }
     }
+  } catch {
+    aiTextLocal = "❌ Errore API.";
+  }
 
-    await addDoc(messagesRef, {
-      sender: "assistant",
-      text: aiText,
-      createdAt: serverTimestamp(),
-      owner: userId,
-    });
+  // ✅ salva 1 messaggio per agent CON metadata
+  await addDoc(messagesRef, {
+    sender: "assistant",
+    text: aiTextLocal,
+    createdAt: serverTimestamp(),
+    owner: userId,
 
-    await updateDoc(doc(db, "sessions", sessionId), {
-      updatedAt: serverTimestamp(),
-      lastMessage: aiText,
-    });
+    agentId: ag.id,
+    agentName: ag.name,
+    agentProvider: ag.provider,
+    agentModel: ag.model,
+    kind: "agent",
+  });
+}
+
+// KPI finali
+setLastCost(lastCostSum);
+setTotalCost((prev) => prev + lastCostSum);
+setLastTokens(lastUsageSum);
+setTotalTokens((prev) => addUsage(prev, lastUsageSum));
+
+// consumiamo pending edit dopo fanout
+if (pendingMemoryEdit) setPendingMemoryEdit(null);
+
+// lastMessage: tieni l’input utente (pulito)
+await updateDoc(doc(db, "sessions", sessionId), {
+  updatedAt: serverTimestamp(),
+  lastMessage: trimmed,
+});
+
   }
 
   // =========================
@@ -732,26 +824,27 @@ useEffect(() => {
 
     {/* Pills agent: click = filtro */}
     <div className="flex items-center gap-2 overflow-x-auto">
-      {(sessionId ? JSON.parse(localStorage.getItem(`anova_agents_${sessionId}`) || "[]") : [])
-        .filter((a: any) => a && a.enabled)
-        .map((a: any) => {
-          const isActive = activeAgentViewId === a.id;
-          return (
-            <button
-              key={a.id}
-              onClick={() => setActiveAgentViewId(isActive ? null : a.id)}
-              className={[
-                "h-8 px-3 rounded-full border text-[12px] whitespace-nowrap transition",
-                isActive
-                  ? "border-sky-300/40 bg-sky-500/20 text-white"
-                  : "border-white/15 bg-black/20 text-white/80 hover:bg-white/10",
-              ].join(" ")}
-              title={a.name}
-            >
-              {a.name}
-            </button>
-          );
-        })}
+{sessionAgents
+  .filter((a) => a && a.enabled)
+  .map((a) => {
+    const isActive = activeAgentViewId === a.id;
+    return (
+      <button
+        key={a.id}
+        onClick={() => setActiveAgentViewId(isActive ? null : a.id)}
+        className={[
+          "h-8 px-3 rounded-full border text-[12px] whitespace-nowrap transition",
+          isActive
+            ? "border-sky-300/40 bg-sky-500/20 text-white"
+            : "border-white/15 bg-black/20 text-white/80 hover:bg-white/10",
+        ].join(" ")}
+        title={a.name}
+      >
+        {a.name}
+      </button>
+    );
+  })}
+
     </div>
 
     {/* Etichetta stato vista */}

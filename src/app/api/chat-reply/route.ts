@@ -146,21 +146,27 @@ function buildAssembledPrompt(args: {
   memoryPacket: MemoryPacketV2 | null;
   rawBuffer: string;
   historyText: string;
+  sharedContext: string;
+  agentRules: string;
   userPrompt: string;
 }): string {
-  const { memoryPacket, rawBuffer, historyText, userPrompt } = args;
 
-  // Niente label "MEMORY_PACKET", "CONTEXT_LOG", "SYSTEM", ecc.
-  // Meno “meta”, più stile app ufficiale.
-  const mem = memoryPacket ? `${JSON.stringify(memoryPacket)}\n\n` : "";
-  const raw = !memoryPacket && rawBuffer ? `${rawBuffer}\n\n` : "";
-  const last = historyText ? `${historyText}\n\n` : "";
+const { memoryPacket, rawBuffer, historyText, sharedContext, agentRules, userPrompt } = args;
 
-  return mem + raw + last + userPrompt;
+// ⚠️ Qui niente pippone fisso.
+// Solo un header micro (se serve) e SOLO quando sharedContext esiste.
+const sc = sharedContext ? `\n${sharedContext}\n\n` : "";
+
+
+// Rules: solo ruolo agente, niente “obbligo operativo”
+const r = agentRules ? `\nAGENT_RULES:\n${agentRules}\n\n` : "";
+
+const mem = memoryPacket ? `${JSON.stringify(memoryPacket)}\n\n` : "";
+const raw = !memoryPacket && rawBuffer ? `${rawBuffer}\n\n` : "";
+const last = historyText ? `${historyText}\n\n` : "";
+
+return mem + raw + sc + r + last + userPrompt;
 }
-
-
-
 // ======================================================
 // MEMORY — token estimate (cheap, coerente col prompt)
 // ======================================================
@@ -194,9 +200,10 @@ export async function POST(req: Request) {
   try {
     const body = await req.json().catch(() => ({}));
 
-    const userPrompt = String(body?.prompt ?? "").trim();
-    const rules = String(body?.rules ?? "").trim();
-    const provider = pickProvider(body?.provider);
+const userPrompt = String(body?.prompt ?? "").trim();
+const rules = String(body?.rules ?? "").trim();
+const provider = pickProvider(body?.provider);
+const sharedContext = String(body?.sharedContext ?? "").trim();
 
     // MEMORY inputs (retrocompatibili)
     const tabId = String(body?.tabId ?? "tab_default").trim();
@@ -365,8 +372,11 @@ const assembledPrompt = buildAssembledPrompt({
   memoryPacket: nextState.compressedMemory,
   rawBuffer: String(nextState?.rawBuffer ?? ""),
   historyText,
+  sharedContext,
+  agentRules: rules,
   userPrompt,
 });
+
 
     let text = "";
     let usage: any = null;

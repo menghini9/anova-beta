@@ -73,10 +73,18 @@ export default function AgentsOverlay({
   onApply,
 }: Props) {
 function applyAndClose() {
-  // NB: agents è già persistito dal tuo useEffect
+  if (!sessionId) return;
+
+  // 1) salva SEMPRE l'ultima lista
+  saveAgents(sessionId, agents);
+
+  // 2) applica alla chat la stessa lista salvata
   onApply(agents);
+
+  // 3) chiudi overlay
   onClose();
 }
+
 
   const [search, setSearch] = useState("");
   const [agents, setAgents] = useState<Agent[]>([]);
@@ -113,11 +121,12 @@ function doDeleteAgent(id: string) {
     setAgents(loadAgents(sessionId));
   }, [sessionId]);
 
-  // persistenza
-  useEffect(() => {
-    if (!sessionId) return;
-    saveAgents(sessionId, agents);
-  }, [sessionId, agents]);
+// persistenza: NON salviamo ad ogni keystroke.
+// Salviamo SOLO su "Applica".
+useEffect(() => {
+  // no-op
+}, []);
+
 
   const filtered = useMemo(() => {
     const t = search.toLowerCase().trim();
@@ -176,7 +185,10 @@ function doDeleteAgent(id: string) {
 
       {/* CARD FULL-SCREEN "seria" */}
       <div className="absolute inset-0 flex items-start justify-center p-6">
-        <div className="w-full max-w-5xl max-h-[calc(100dvh-3rem)] rounded-3xl border border-white/15 bg-[#071425]/75 backdrop-blur-xl shadow-2xl overflow-hidden flex flex-col">
+       <div
+  className="w-full max-w-5xl max-h-[calc(100dvh-3rem)] rounded-3xl border border-white/15 bg-[#071425]/75 backdrop-blur-xl shadow-2xl overflow-hidden flex flex-col"
+  onClick={(e) => e.stopPropagation()}
+>
           {/* Header */}
           <div className="h-16 px-6 flex items-center justify-between border-b border-white/10">
             <div className="flex items-baseline gap-3">
