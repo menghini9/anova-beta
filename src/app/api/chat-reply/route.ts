@@ -1,5 +1,5 @@
 // ======================================================
-// API — chat-reply (KPI Contract Stable + MEMORY V2)
+// API - chat-reply (KPI Contract Stable + MEMORY V2)
 // Path: src/app/api/chat-reply/route.ts
 // ======================================================
 
@@ -36,14 +36,14 @@ type CostLite = {
 };
 
 // =========================
-// HELPERS — numeri sicuri
+// HELPERS - numeri sicuri
 // =========================
 function n(v: any): number {
   const x = Number(v);
   return Number.isFinite(x) ? x : 0;
 }
 // =========================
-// MEMORY — safe stringify (guard)
+// MEMORY - safe stringify (guard)
 // evita packet enormi o JSON rotti
 // =========================
 function safeStringify(
@@ -60,7 +60,7 @@ function safeStringify(
 }
 
 // =========================
-// NORMALIZER — usage
+// NORMALIZER - usage
 // Supporta vari formati (OpenAI/Gemini/Claude/altro)
 // =========================
 function normalizeUsage(raw: any): UsageLite {
@@ -92,7 +92,7 @@ function normalizeUsage(raw: any): UsageLite {
 }
 
 // =========================
-// NORMALIZER — cost
+// NORMALIZER - cost
 // =========================
 function normalizeCost(raw: any): CostLite {
   const total = raw?.totalCost ?? raw?.total_cost ?? raw?.eur ?? 0;
@@ -104,7 +104,7 @@ function normalizeCost(raw: any): CostLite {
 }
 
 // =========================
-// PROVIDER PICKER — robusto
+// PROVIDER PICKER - robusto
 // body.provider: "openai" | "gemini" | "claude"
 // fallback: openai
 // =========================
@@ -116,7 +116,7 @@ function pickProvider(v: any): "openai" | "gemini" | "claude" {
 }
 
 // =========================
-// MEMORY — default state
+// MEMORY - default state
 // =========================
 function emptyMemoryState(): MemoryState {
   return {
@@ -131,16 +131,16 @@ function emptyMemoryState(): MemoryState {
 
 
 // =========================
-// MEMORY — build prompt
+// MEMORY - build prompt
 // Regola: dopo compressione NON reinviamo history lunga.
 // Il client deve inviare solo ultimi 1-2 turni in historyText.
 // =========================
 // ======================================================
-// MEMORY — build prompt (RAW + PACKET aware)
+// MEMORY - build prompt (RAW + PACKET aware)
 // Regola:
-// - se c'è compressedMemory → usa SOLO quello
-// - se NON c'è → usa rawBuffer come contesto lungo
-// - historyText = ultimi 1–2 turni (micro-delta)
+// - se c'e compressedMemory -> usa SOLO quello
+// - se NON c'e -> usa rawBuffer come contesto lungo
+// - historyText = ultimi 1-2 turni (micro-delta)
 // ======================================================
 function buildAssembledPrompt(args: {
   memoryPacket: MemoryPacketV2 | null;
@@ -153,12 +153,12 @@ function buildAssembledPrompt(args: {
 
 const { memoryPacket, rawBuffer, historyText, sharedContext, agentRules, userPrompt } = args;
 
-// ⚠️ Qui niente pippone fisso.
+// Attenzione: qui niente pippone fisso.
 // Solo un header micro (se serve) e SOLO quando sharedContext esiste.
 const sc = sharedContext ? `\n${sharedContext}\n\n` : "";
 
 
-// Rules: solo ruolo agente, niente “obbligo operativo”
+// Rules: solo ruolo agente, niente "obbligo operativo"
 const r = agentRules ? `\nAGENT_RULES:\n${agentRules}\n\n` : "";
 
 const mem = memoryPacket ? `${JSON.stringify(memoryPacket)}\n\n` : "";
@@ -168,7 +168,7 @@ const last = historyText ? `${historyText}\n\n` : "";
 return mem + raw + sc + r + last + userPrompt;
 }
 // ======================================================
-// MEMORY — token estimate (cheap, coerente col prompt)
+// MEMORY - token estimate (cheap, coerente col prompt)
 // ======================================================
 function estimateContextTokens(args: {
   memoryPacket: MemoryPacketV2 | null;
@@ -211,8 +211,8 @@ const sharedContext = String(body?.sharedContext ?? "").trim();
     const incomingMemoryState: MemoryState =
       (body?.memoryState as MemoryState) ?? emptyMemoryState();
 // ======================================================
-// MEMORY — EDIT input (opzionale)
-// Il client può sostituire la memoria compressa
+// MEMORY - EDIT input (opzionale)
+// Il client puo sostituire la memoria compressa
 // ======================================================
 const memoryEdit = body?.memoryEdit ?? null;
 
@@ -222,7 +222,7 @@ const memoryEdit = body?.memoryEdit ?? null;
     if (!userPrompt) {
       return NextResponse.json(
         {
-          finalText: "⚠️ Prompt vuoto.",
+          finalText: "Prompt vuoto.",
           provider,
           model: null,
           usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
@@ -243,7 +243,7 @@ const memoryEdit = body?.memoryEdit ?? null;
     }
 
     // ======================================================
-    // A) MEMORY — triggers + compression
+    // A) MEMORY - triggers + compression
     // ======================================================
 const approxContextTokens = estimateContextTokens({
   memoryPacket,
@@ -253,7 +253,7 @@ const approxContextTokens = estimateContextTokens({
   userPrompt,
 });
 // ======================================================
-// MEMORY — UI EVENT (compressione / edit)
+// MEMORY - UI EVENT (compressione / edit)
 // ======================================================
 let memoryEvent:
   | {
@@ -276,11 +276,11 @@ const nextState: MemoryState = {
   memoryVersion: Number(incomingMemoryState?.memoryVersion ?? 0),
   approxContextTokens,
 
-  // ✅ rawBuffer resta lato client, ma lo portiamo avanti nello state
+  // rawBuffer resta lato client, ma lo portiamo avanti nello state
   rawBuffer: String(incomingMemoryState?.rawBuffer ?? ""),
 };
 // ======================================================
-// MEMORY — APPLY USER EDIT (replace packet)
+// MEMORY - APPLY USER EDIT (replace packet)
 // Nota: versione incrementata, rawBuffer svuotato
 // ======================================================
 if (memoryEdit?.mode === "replace_packet" && memoryEdit?.packet) {
@@ -346,10 +346,10 @@ if (shouldCompress) {
     nextState.memoryVersion = nextVersion;
     nextState.pendingCompression = false;
 
-    // ✅ svuota rawBuffer: ora è tutto nel packet
+    // Svuota rawBuffer: ora e tutto nel packet
     nextState.rawBuffer = "";
         // ======================================================
-    // MEMORY — EVENT: compressione avvenuta
+    // MEMORY - EVENT: compressione avvenuta
     // ======================================================
     memoryEvent = {
       type: "compressed",
@@ -366,7 +366,7 @@ if (shouldCompress) {
 
 
     // ======================================================
-    // B) Provider reply — usa assembledPrompt
+    // B) Provider reply - usa assembledPrompt
     // ======================================================
 const assembledPrompt = buildAssembledPrompt({
   memoryPacket: nextState.compressedMemory,
@@ -405,7 +405,7 @@ const assembledPrompt = buildAssembledPrompt({
 const usageNorm = normalizeUsage(usage);
 
 // ======================================================
-// D) Cost — calcolo coerente (provider-agnostic)
+// D) Cost - calcolo coerente (provider-agnostic)
 // computeProviderCost legge input/output/total
 // ======================================================
 const usageForCost = {
@@ -425,7 +425,7 @@ const costRaw = computeProviderCost({
 // ======================================================
 const costNorm = normalizeCost(costRaw);
 // ======================================================
-// DEBUG — PROVIDER PACKET PREVIEW (trasparenza UI)
+// DEBUG - PROVIDER PACKET PREVIEW (trasparenza UI)
 // ======================================================
 const providerPacketPreview = {
   provider,
@@ -471,7 +471,7 @@ providerPacketPreview,
   } catch (err: any) {
     return NextResponse.json(
       {
-        finalText: "❌ Errore API.",
+        finalText: "Errore API.",
         provider: "openai",
         model: null,
         usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
